@@ -1,4 +1,5 @@
-import 'package:sqflite/sqflite.dart';
+import 'dart:io';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart' as p;
 
 class LocalChatMessage {
@@ -111,43 +112,77 @@ class LocalDatabaseService {
   }
 
   static Future<Database> _initDb() async {
-    final dbPath = await getDatabasesPath();
-    final path = p.join(dbPath, 'metric_local_vault.db');
+    try {
+      if (Platform.isWindows || Platform.isLinux) {
+        sqfliteFfiInit();
+        databaseFactory = databaseFactoryFfi;
+      }
+      final dbPath = await getDatabasesPath();
+      final path = p.join(dbPath, 'metric_local_vault.db');
 
-    return await openDatabase(
-      path,
-      version: 1,
-      onCreate: (db, version) async {
-        // Chat messages table
-        await db.execute('''
-          CREATE TABLE messages (
-            id TEXT PRIMARY KEY,
-            senderUid TEXT,
-            receiverUid TEXT,
-            text TEXT,
-            timestamp INTEGER,
-            expiresAt INTEGER,
-            isMe INTEGER,
-            mediaType TEXT,
-            reaction TEXT
-          )
-        ''');
+      return await openDatabase(
+        path,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE messages (
+              id TEXT PRIMARY KEY,
+              senderUid TEXT,
+              receiverUid TEXT,
+              text TEXT,
+              timestamp INTEGER,
+              expiresAt INTEGER,
+              isMe INTEGER,
+              mediaType TEXT,
+              reaction TEXT
+            )
+          ''');
 
-        // Unit conversions history & favorites table
-        await db.execute('''
-          CREATE TABLE conversions (
-            id TEXT PRIMARY KEY,
-            category TEXT,
-            fromUnit TEXT,
-            toUnit TEXT,
-            fromValue REAL,
-            toValue REAL,
-            timestamp INTEGER,
-            isFavorite INTEGER
-          )
-        ''');
-      },
-    );
+          await db.execute('''
+            CREATE TABLE conversions (
+              id TEXT PRIMARY KEY,
+              category TEXT,
+              fromUnit TEXT,
+              toUnit TEXT,
+              fromValue REAL,
+              toValue REAL,
+              timestamp INTEGER,
+              isFavorite INTEGER
+            )
+          ''');
+        },
+      );
+    } catch (_) {
+      // In-memory robust fallback for environments without file system write permission
+      sqfliteFfiInit();
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+          id TEXT PRIMARY KEY,
+          senderUid TEXT,
+          receiverUid TEXT,
+          text TEXT,
+          timestamp INTEGER,
+          expiresAt INTEGER,
+          isMe INTEGER,
+          mediaType TEXT,
+          reaction TEXT
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS conversions (
+          id TEXT PRIMARY KEY,
+          category TEXT,
+          fromUnit TEXT,
+          toUnit TEXT,
+          fromValue REAL,
+          toValue REAL,
+          timestamp INTEGER,
+          isFavorite INTEGER
+        )
+      ''');
+      return db;
+    }
   }
 
   // --- Chat Operations ---
@@ -162,7 +197,6 @@ class LocalDatabaseService {
 
   static Future<List<LocalChatMessage>> getMessages() async {
     final db = await database;
-    // Auto-purge expired ephemeral messages
     final now = DateTime.now().millisecondsSinceEpoch;
     await db.delete('messages', where: 'expiresAt IS NOT NULL AND expiresAt < ?', whereArgs: [now]);
 

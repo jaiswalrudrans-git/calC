@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'core/theme/app_theme.dart';
 import 'core/security/signal_crypto.dart';
 import 'core/security/privacy_guard.dart';
@@ -12,19 +14,13 @@ import 'features/converter/screens/converter_home_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Transparent Firebase initialization (fails gracefully if config json/plist not yet placed)
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {
-    // Offline mode or configuration pending
+  // Initialize SQLite FFI for desktop (Windows / Linux)
+  if (Platform.isWindows || Platform.isLinux) {
+    try {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    } catch (_) {}
   }
-
-  // Generate or restore hardware-backed Signal Identity Keys
-  await SignalCryptoService.ensureIdentityKeys();
-  await AuthService.getOrCreateDeviceUid();
-
-  // Screen protection against capture / recording
-  await PrivacyGuard.setScreenProtection(true);
 
   // Set system UI style (edge to edge, transparent bar)
   SystemChrome.setSystemUIOverlayStyle(
@@ -34,11 +30,29 @@ void main() async {
     ),
   );
 
+  // Run the app IMMEDIATELY so the user never sees a blank screen!
   runApp(
     const ProviderScope(
       child: MetricApp(),
     ),
   );
+
+  // Background initialization of cryptographic and cloud services
+  _initializeBackgroundServices();
+}
+
+Future<void> _initializeBackgroundServices() async {
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp();
+    }
+  } catch (_) {}
+
+  try {
+    await SignalCryptoService.ensureIdentityKeys();
+    await AuthService.getOrCreateDeviceUid();
+    await PrivacyGuard.setScreenProtection(true);
+  } catch (_) {}
 }
 
 class MetricApp extends StatefulWidget {
@@ -65,9 +79,14 @@ class _MetricAppState extends State<MetricApp> with WidgetsBindingObserver {
   }
 
   Future<void> _initialBiometricCheck() async {
+    // Only lock on startup if the device has been paired
+    final isPaired = await SecureKeyStorage.isPaired();
+    if (!isPaired) return;
+
+    final canBio = await PrivacyGuard.canCheckBiometrics();
     final bioEnabled = await SecureKeyStorage.isBiometricsEnabled();
-    if (bioEnabled) {
-      setState(() => _isLocked = true);
+    if (canBio && bioEnabled) {
+      if (mounted) setState(() => _isLocked = true);
       final unlocked = await PrivacyGuard.authenticate();
       if (mounted) {
         setState(() => _isLocked = !unlocked);
@@ -80,14 +99,17 @@ class _MetricAppState extends State<MetricApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       PrivacyGuard.markActive();
     } else if (state == AppLifecycleState.resumed) {
-      PrivacyGuard.shouldLockOnResume().then((shouldLock) async {
-        if (shouldLock && mounted) {
-          setState(() => _isLocked = true);
-          final unlocked = await PrivacyGuard.authenticate();
-          if (mounted) {
-            setState(() => _isLocked = !unlocked);
+      SecureKeyStorage.isPaired().then((isPaired) {
+        if (!isPaired) return;
+        PrivacyGuard.shouldLockOnResume().then((shouldLock) async {
+          if (shouldLock && mounted) {
+            setState(() => _isLocked = true);
+            final unlocked = await PrivacyGuard.authenticate();
+            if (mounted) {
+              setState(() => _isLocked = !unlocked);
+            }
           }
-        }
+        });
       });
     }
   }
@@ -113,7 +135,7 @@ class _MetricAppState extends State<MetricApp> with WidgetsBindingObserver {
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: Theme.of(context).primaryColor.withOpacity(0.12),
+                color: Theme.of(context).primaryColor.withAlpha(30),
                 shape: BoxShape.circle,
               ),
               child: Icon(
