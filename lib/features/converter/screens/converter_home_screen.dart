@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,15 +24,51 @@ class ConverterHomeScreen extends ConsumerStatefulWidget {
 class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
   int _currentTabIndex = 0;
   final TextEditingController _searchController = TextEditingController();
+  final List<String> _knockSequence = [];
+  Timer? _knockResetTimer;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _knockResetTimer?.cancel();
     super.dispose();
+  }
+
+  void _registerKnockTap(String categoryId) async {
+    HapticFeedback.lightImpact();
+
+    _knockSequence.add(categoryId);
+
+    // Reset buffer after 3.5 seconds of inactivity
+    _knockResetTimer?.cancel();
+    _knockResetTimer = Timer(const Duration(milliseconds: 3500), () {
+      _knockSequence.clear();
+    });
+
+    final targetSequence = await SecureKeyStorage.getSecretKnockSequence();
+
+    // Check if the current knock buffer ends with the secret combination
+    if (_knockSequence.length >= targetSequence.length) {
+      final sublist = _knockSequence.sublist(_knockSequence.length - targetSequence.length);
+      bool isMatch = true;
+      for (int i = 0; i < targetSequence.length; i++) {
+        if (sublist[i] != targetSequence[i]) {
+          isMatch = false;
+          break;
+        }
+      }
+
+      if (isMatch) {
+        _knockResetTimer?.cancel();
+        _knockSequence.clear();
+        _openSecretVault();
+      }
+    }
   }
 
   void _onCategoryTap(UnitCategory category) {
     HapticFeedback.selectionClick();
+    _registerKnockTap(category.id);
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => UnitDetailScreen(category: category)),
@@ -470,20 +507,23 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              // Icon Badge
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? category.iconColor.withOpacity(0.18)
-                      : category.badgeColor,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  category.icon,
-                  color: category.iconColor,
-                  size: 22,
+              // Icon Badge with dedicated Secret Knock tap interceptor
+              GestureDetector(
+                onTap: () => _registerKnockTap(category.id),
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? category.iconColor.withAlpha(46)
+                        : category.badgeColor,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    category.icon,
+                    color: category.iconColor,
+                    size: 22,
+                  ),
                 ),
               ),
               const SizedBox(width: 10),

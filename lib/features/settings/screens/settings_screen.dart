@@ -3,6 +3,7 @@ import '../../../core/security/secure_key_storage.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../pairing/screens/pairing_screen.dart';
+import 'secret_knock_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -232,6 +233,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: Text(_autoLockSeconds == 0 ? 'Immediately' : '$_autoLockSeconds seconds'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: _showAutoLockDialog,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.dialpad_rounded, color: AppColors.amberIcon),
+                  title: const Text('Secret Knock Combination', style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Custom tap sequence to open vault'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const SecretKnockScreen()),
+                    );
+                  },
                 ),
               ],
             ),

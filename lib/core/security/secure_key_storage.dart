@@ -27,6 +27,7 @@ class SecureKeyStorage {
   static const _kBiometricsEnabled = 'metric_biometrics_enabled';
   static const _kAutoLockSeconds = 'metric_auto_lock_seconds';
   static const _kDisappearingTimerSeconds = 'metric_disappearing_timer_seconds';
+  static const _kSecretKnockSequence = 'metric_secret_knock_sequence';
 
   // Identity Keys
   static Future<void> saveIdentityKeyPair({
@@ -108,6 +109,20 @@ class SecureKeyStorage {
 
   static Future<void> setDisappearingTimerSeconds(int seconds) =>
       _storage.write(key: _kDisappearingTimerSeconds, value: seconds.toString());
+
+  // Secret Knock Combination
+  static Future<List<String>> getSecretKnockSequence() async {
+    final value = await _storage.read(key: _kSecretKnockSequence);
+    if (value != null && value.isNotEmpty) {
+      final list = value.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      if (list.isNotEmpty) return list;
+    }
+    // Default secret sequence requested by user: Length -> Length -> Pressure
+    return ['length', 'length', 'pressure'];
+  }
+
+  static Future<void> setSecretKnockSequence(List<String> sequence) =>
+      _storage.write(key: _kSecretKnockSequence, value: sequence.join(','));
 
   // Wipe all keys (nuclear reset)
   static Future<void> clearAll() => _storage.deleteAll();
