@@ -25,29 +25,61 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
   int _currentTabIndex = 0;
   final TextEditingController _searchController = TextEditingController();
   final List<String> _knockSequence = [];
+  Timer? _pendingNavTimer;
   Timer? _knockResetTimer;
+  bool _isSequenceMode = false;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _pendingNavTimer?.cancel();
     _knockResetTimer?.cancel();
     super.dispose();
   }
 
-  void _registerKnockTap(String categoryId) async {
-    HapticFeedback.lightImpact();
+  void _onCategoryTap(UnitCategory category) async {
+    final targetSequence = await SecureKeyStorage.getSecretKnockSequence();
 
-    _knockSequence.add(categoryId);
+    if (!_isSequenceMode) {
+      if (_knockSequence.isEmpty) {
+        // First tap: buffer this category and start an 800ms window
+        HapticFeedback.selectionClick();
+        _knockSequence.add(category.id);
 
-    // Reset buffer after 3.5 seconds of inactivity
+        _pendingNavTimer?.cancel();
+        _pendingNavTimer = Timer(const Duration(milliseconds: 800), () {
+          // If no second tap arrived within 800ms, proceed with normal converter navigation
+          _knockSequence.clear();
+          _isSequenceMode = false;
+          if (mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => UnitDetailScreen(category: category)),
+            );
+          }
+        });
+        return;
+      } else {
+        // Second tap arrived within 800ms! Cancel navigation to stay on Home Screen!
+        _pendingNavTimer?.cancel();
+        _isSequenceMode = true;
+        _knockSequence.add(category.id);
+        HapticFeedback.mediumImpact(); // Tactile feedback that secret sequence mode is armed!
+      }
+    } else {
+      // Subsequent tap in sequence
+      _knockSequence.add(category.id);
+      HapticFeedback.lightImpact();
+    }
+
+    // While in sequence mode, user has a generous 3.5 seconds between taps
     _knockResetTimer?.cancel();
     _knockResetTimer = Timer(const Duration(milliseconds: 3500), () {
       _knockSequence.clear();
+      _isSequenceMode = false;
     });
 
-    final targetSequence = await SecureKeyStorage.getSecretKnockSequence();
-
-    // Check if the current knock buffer ends with the secret combination
+    // Check if the buffered taps match the secret combination
     if (_knockSequence.length >= targetSequence.length) {
       final sublist = _knockSequence.sublist(_knockSequence.length - targetSequence.length);
       bool isMatch = true;
@@ -59,20 +91,14 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
       }
 
       if (isMatch) {
+        _pendingNavTimer?.cancel();
         _knockResetTimer?.cancel();
         _knockSequence.clear();
+        _isSequenceMode = false;
+        HapticFeedback.heavyImpact();
         _openSecretVault();
       }
     }
-  }
-
-  void _onCategoryTap(UnitCategory category) {
-    HapticFeedback.selectionClick();
-    _registerKnockTap(category.id);
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => UnitDetailScreen(category: category)),
-    );
   }
 
   /// Discrete access to the 1-to-1 End-to-End Encrypted Vault:
@@ -507,23 +533,20 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              // Icon Badge with dedicated Secret Knock tap interceptor
-              GestureDetector(
-                onTap: () => _registerKnockTap(category.id),
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: isDark
-                        ? category.iconColor.withAlpha(46)
-                        : category.badgeColor,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(
-                    category.icon,
-                    color: category.iconColor,
-                    size: 22,
-                  ),
+              // Icon Badge
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? category.iconColor.withAlpha(46)
+                      : category.badgeColor,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  category.icon,
+                  color: category.iconColor,
+                  size: 22,
                 ),
               ),
               const SizedBox(width: 10),
