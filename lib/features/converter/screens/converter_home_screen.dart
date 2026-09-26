@@ -1,0 +1,533 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/theme/app_colors.dart';
+import '../models/unit_category.dart';
+import '../providers/converter_provider.dart';
+import 'unit_detail_screen.dart';
+import 'conversion_history_screen.dart';
+import 'favorites_screen.dart';
+import '../../settings/screens/settings_screen.dart';
+import '../../messenger/screens/chat_screen.dart';
+import '../../pairing/screens/pairing_screen.dart';
+import '../../../core/security/secure_key_storage.dart';
+import '../../../core/security/privacy_guard.dart';
+
+class ConverterHomeScreen extends ConsumerStatefulWidget {
+  const ConverterHomeScreen({super.key});
+
+  @override
+  ConsumerState<ConverterHomeScreen> createState() => _ConverterHomeScreenState();
+}
+
+class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
+  int _currentTabIndex = 0;
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onCategoryTap(UnitCategory category) {
+    HapticFeedback.selectionClick();
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => UnitDetailScreen(category: category)),
+    );
+  }
+
+  /// Discrete access to the 1-to-1 End-to-End Encrypted Vault:
+  /// Triggered by long-pressing the header title or via settings
+  Future<void> _openSecretVault() async {
+    HapticFeedback.heavyImpact();
+
+    // 1. Biometric verification
+    final authenticated = await PrivacyGuard.authenticate();
+    if (!authenticated && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Biometric verification required'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+
+    // 2. Check if paired
+    final isPaired = await SecureKeyStorage.isPaired();
+    if (!mounted) return;
+
+    if (isPaired) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const ChatScreen()),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const PairingScreen()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    Widget body;
+    switch (_currentTabIndex) {
+      case 1:
+        body = const ConversionHistoryScreen();
+        break;
+      case 2:
+        body = const FavoritesScreen();
+        break;
+      case 0:
+      default:
+        body = _buildHomeContent(isDark);
+        break;
+    }
+
+    return Scaffold(
+      backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+      body: SafeArea(
+        child: body,
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+          border: Border(
+            top: BorderSide(
+              color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+              width: 1.0,
+            ),
+          ),
+        ),
+        child: BottomNavigationBar(
+          currentIndex: _currentTabIndex,
+          onTap: (index) {
+            HapticFeedback.selectionClick();
+            setState(() => _currentTabIndex = index);
+          },
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_filled),
+              label: 'Home',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.schedule_rounded),
+              label: 'History',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.star_rounded),
+              label: 'Favorites',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHomeContent(bool isDark) {
+    final categories = ref.watch(filteredCategoriesProvider);
+
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        // App Header
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title & Subtitle with hidden long-press vault trigger
+                GestureDetector(
+                  onLongPress: _openSecretVault,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Unit Converter',
+                        style: TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.6,
+                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Quick. Accurate. Everyday.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Settings Icon (also allows vault access)
+                IconButton(
+                  onPressed: () {
+                    HapticFeedback.lightImpact();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                    );
+                  },
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                      border: Border.all(
+                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.settings_outlined,
+                      size: 20,
+                      color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Search Bar
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Container(
+              height: 48,
+              decoration: BoxDecoration(
+                color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                  width: 1.2,
+                ),
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (val) => ref.read(searchQueryProvider.notifier).setQuery(val),
+                decoration: InputDecoration(
+                  hintText: 'Search conversions...',
+                  hintStyle: TextStyle(
+                    fontSize: 15,
+                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                  ),
+                  prefixIcon: Icon(
+                    Icons.search_rounded,
+                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                    size: 20,
+                  ),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            ref.read(searchQueryProvider.notifier).setQuery('');
+                          },
+                        )
+                      : null,
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // Hero "Convert Everything" Card
+        if (_searchController.text.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: _buildHeroCard(isDark),
+            ),
+          ),
+
+        // 2-Column Category Grid
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              crossAxisSpacing: 14,
+              mainAxisSpacing: 14,
+              mainAxisExtent: 88,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final category = categories[index];
+                return _buildCategoryCard(category, isDark);
+              },
+              childCount: categories.length,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeroCard(bool isDark) {
+    return Container(
+      height: 168,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1E2845), const Color(0xFF161F38)]
+              : [const Color(0xFFEEF3FF), const Color(0xFFDFEBFF)],
+        ),
+        border: Border.all(
+          color: isDark ? const Color(0xFF2C3B63) : const Color(0xFFD6E4FF),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: (isDark ? Colors.black : const Color(0xFF2563EB)).withOpacity(0.08),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // Left text content
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 22, 120, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'Convert\nEverything',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    height: 1.15,
+                    letterSpacing: -0.5,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Length, weight, temperature\nand more — all in one place.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.3,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Right 3D Calculator illustration & Floating Pills
+          Positioned(
+            right: 14,
+            top: 14,
+            bottom: 14,
+            width: 130,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // 3D Calculator card
+                Container(
+                  width: 78,
+                  height: 104,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF2563EB).withOpacity(0.35),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    children: [
+                      // Screen
+                      Container(
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.25),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Buttons Grid
+                      Expanded(
+                        child: GridView.count(
+                          crossAxisCount: 3,
+                          mainAxisSpacing: 4,
+                          crossAxisSpacing: 4,
+                          physics: const NeverScrollableScrollPhysics(),
+                          children: List.generate(9, (i) {
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: i == 7
+                                    ? Colors.amber[400]
+                                    : Colors.white.withOpacity(0.85),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Floating Tag: kg
+                Positioned(
+                  top: 4,
+                  left: 2,
+                  child: _buildFloatingTag('kg', isDark),
+                ),
+
+                // Floating Tag: m
+                Positioned(
+                  top: 6,
+                  right: 4,
+                  child: _buildFloatingTag('m', isDark),
+                ),
+
+                // Floating Tag: °C
+                Positioned(
+                  bottom: 6,
+                  right: 4,
+                  child: _buildFloatingTag('°C', isDark),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFloatingTag(String label, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: (isDark ? const Color(0xFF253352) : Colors.white).withOpacity(0.9),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCategoryCard(UnitCategory category, bool isDark) {
+    return Material(
+      color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(
+          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+          width: 1.2,
+        ),
+      ),
+      child: InkWell(
+        onTap: () => _onCategoryTap(category),
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              // Icon Badge
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? category.iconColor.withOpacity(0.18)
+                      : category.badgeColor,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  category.icon,
+                  color: category.iconColor,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Name and Subtitle
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      category.name,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.2,
+                        color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      category.subtitle,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              // Chevron Arrow
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: isDark ? const Color(0xFF4B5563) : const Color(0xFFCBD5E1),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
