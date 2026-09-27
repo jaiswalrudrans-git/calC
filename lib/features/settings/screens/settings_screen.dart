@@ -130,7 +130,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               await SecureKeyStorage.clearAll();
               await LocalDatabaseService.clearAllMessages();
               if (ctx.mounted) Navigator.pop(ctx);
-              await _loadSettings();
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -138,6 +137,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     backgroundColor: AppColors.alertRed,
                   ),
                 );
+                // Return to Unit Converter decoy screen
+                Navigator.of(context).popUntil((route) => route.isFirst);
               }
             },
             child: const Text('Unpair & Reset', style: TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.bold)),

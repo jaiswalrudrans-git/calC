@@ -8,6 +8,7 @@ import '../providers/converter_provider.dart';
 import 'unit_detail_screen.dart';
 import 'conversion_history_screen.dart';
 import 'favorites_screen.dart';
+import 'converter_settings_screen.dart';
 import '../../messenger/screens/chat_screen.dart';
 import '../../pairing/screens/pairing_screen.dart';
 import '../../../core/security/secure_key_storage.dart';
@@ -173,26 +174,44 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(
-                  'Unit Converter',
-                  style: TextStyle(
-                    fontSize: 30,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.6,
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Unit Converter',
+                      style: TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.6,
+                        color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Quick. Accurate. Everyday.',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'Quick. Accurate. Everyday.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                  ),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined, size: 24),
+                  tooltip: 'Settings',
+                  color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                  onPressed: () {
+                    HapticFeedback.lightImpact();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const ConverterSettingsScreen()),
+                    );
+                  },
                 ),
               ],
             ),

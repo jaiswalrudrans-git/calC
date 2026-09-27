@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/config/supabase_config.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'core/theme/theme_provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/security/signal_crypto.dart';
 import 'core/security/privacy_guard.dart';
@@ -63,14 +64,14 @@ Future<void> _initializeBackgroundServices() async {
   }
 }
 
-class MetricApp extends StatefulWidget {
+class MetricApp extends ConsumerStatefulWidget {
   const MetricApp({super.key});
 
   @override
-  State<MetricApp> createState() => _MetricAppState();
+  ConsumerState<MetricApp> createState() => _MetricAppState();
 }
 
-class _MetricAppState extends State<MetricApp> with WidgetsBindingObserver {
+class _MetricAppState extends ConsumerState<MetricApp> with WidgetsBindingObserver {
   bool _isLocked = false;
 
   @override
@@ -124,12 +125,14 @@ class _MetricAppState extends State<MetricApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final themeMode = ref.watch(themeModeProvider);
+
     return MaterialApp(
       title: 'Metric',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system,
+      themeMode: themeMode,
       home: _isLocked ? _buildLockScreen() : const ConverterHomeScreen(),
     );
   }

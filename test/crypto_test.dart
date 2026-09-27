@@ -122,4 +122,14 @@ void main() {
     expect(await SecureKeyStorage.verifyPasscode('4321'), isTrue);
     expect(await SecureKeyStorage.verifyPasscode('1234'), isFalse);
   });
+
+  test('SecureKeyStorage secret knock sequence defaults and customization', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final defaultSeq = await SecureKeyStorage.getSecretKnockSequence();
+    expect(defaultSeq, ['length', 'length', 'pressure']);
+
+    await SecureKeyStorage.setSecretKnockSequence(['mass', 'temperature', 'speed']);
+    final customSeq = await SecureKeyStorage.getSecretKnockSequence();
+    expect(customSeq, ['mass', 'temperature', 'speed']);
+  });
 }
