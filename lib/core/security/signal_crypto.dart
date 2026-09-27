@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
+import '../config/supabase_config.dart';
+import 'auth_service.dart';
 import 'secure_key_storage.dart';
 
 /// Public Key Bundle exchanged during pairing.
@@ -303,7 +306,11 @@ class SignalCryptoService {
   }
 
   /// Connect and establish an encrypted session using the peer's 6-digit Connect Code
-  static Future<void> pairWithConnectCode(String rawCode) async {
+  static Future<void> pairWithConnectCode(
+    String rawCode, {
+    String? explicitPeerUid,
+    String? explicitPeerPublicKeyHex,
+  }) async {
     final cleanPeerCode = rawCode.replaceAll(RegExp(r'[^0-9]'), '');
     if (cleanPeerCode.length != 6) {
       throw Exception('Connect code must be exactly 6 digits.');
@@ -318,11 +325,39 @@ class SignalCryptoService {
 
     await ensurePrekeyBundle();
 
-    // Standardized UIDs based on connect codes
-    final myUid = cleanMyCode.isNotEmpty ? 'code_$cleanMyCode' : (await SecureKeyStorage.getMyDeviceId() ?? '');
-    final peerUid = 'code_$cleanPeerCode';
+    // 1. Resolve peer UUID and public key bundle
+    String resolvedPeerUid = explicitPeerUid ?? '';
+    String resolvedPeerPubKey = explicitPeerPublicKeyHex ?? '';
 
-    // Deterministic symmetrical shared key derivation using HKDF from sorted connect codes
+    final client = SupabaseConfig.client;
+    if (resolvedPeerUid.isEmpty && client != null && SupabaseConfig.isConfigured) {
+      try {
+        final codeInt = int.tryParse(cleanPeerCode);
+        if (codeInt != null) {
+          final row = await client.from('pairing_exchange').select().eq('code', codeInt).maybeSingle();
+          if (row != null) {
+            resolvedPeerUid = row['uid'] as String? ?? '';
+            final bundleMap = row['public_key_bundle'] as Map<String, dynamic>?;
+            if (bundleMap != null) {
+              resolvedPeerPubKey = bundleMap['identity_key'] as String? ?? '';
+              try {
+                final bundle = PublicKeyBundle.fromJson(bundleMap);
+                await saveRemotePeerBundle(peerUid: resolvedPeerUid, bundle: bundle);
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('[SignalCrypto] Query peer pairing_exchange error: $e');
+      }
+    }
+
+    if (resolvedPeerUid.isEmpty) {
+      // Deterministic RFC-4122 v5 UUID based on peer connect code
+      resolvedPeerUid = const Uuid().v5(Namespace.url.value, 'metric:connect_code:$cleanPeerCode');
+    }
+
+    // 2. Deterministic symmetrical shared key derivation using HKDF from sorted connect codes
     final codes = [cleanMyCode.isNotEmpty ? cleanMyCode : '000000', cleanPeerCode]..sort();
     final combinedKeyInfo = utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}');
 
@@ -357,11 +392,102 @@ class SignalCryptoService {
       recvChainKeyHex: _bytesToHex(recvChain),
     );
 
-    // Save paired peer with empty remote public key so Double Ratchet utilizes symmetrical chain keys
+    // Save paired peer and peer connect code
     await SecureKeyStorage.savePairedPeer(
-      peerUid: peerUid,
-      peerPublicKeyHex: '',
+      peerUid: resolvedPeerUid,
+      peerPublicKeyHex: resolvedPeerPubKey,
     );
+    await SecureKeyStorage.savePeerConnectCode(cleanPeerCode);
+  }
+
+  /// Publish this device's connect code and public key bundle to Supabase pairing_exchange table
+  static Future<void> publishMyConnectCode() async {
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+
+    try {
+      // Ensure Supabase auth session is active
+      if (client.auth.currentUser == null) {
+        try {
+          await client.auth.signInAnonymously();
+        } catch (_) {}
+      }
+
+      final myUid = client.auth.currentUser?.id ?? await AuthService.getOrCreateDeviceUid();
+      final myCode = await SecureKeyStorage.getMyConnectCode();
+      if (myCode == null || myCode.isEmpty) return;
+      final cleanCode = myCode.replaceAll(RegExp(r'[^0-9]'), '');
+      final codeInt = int.tryParse(cleanCode);
+      if (codeInt == null) return;
+
+      // Update stored device UID to match auth UID
+      await SecureKeyStorage.saveMyDeviceId(myUid);
+
+      final bundle = await getLocalPublicKeyBundle();
+      await client.from('pairing_exchange').upsert({
+        'code': codeInt,
+        'uid': myUid,
+        'public_key_bundle': bundle.toJson(),
+      });
+      if (kDebugMode) {
+        debugPrint('[SignalCrypto] Published connect code $cleanCode for UID $myUid');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[SignalCrypto] Publish connect code notice: $e');
+      }
+    }
+  }
+
+  /// Initiates unilateral pairing: User enters peer's 6-digit code.
+  /// Automatically configures encryption, notifies peer via Realtime beacon,
+  /// and sends an initial handshake so peer auto-connects without needing to enter a code!
+  static Future<void> initiateUnilateralPairing(String targetCode) async {
+    final cleanPeerCode = targetCode.replaceAll(RegExp(r'[^0-9]'), '');
+    await pairWithConnectCode(cleanPeerCode);
+    await publishMyConnectCode();
+
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+
+    try {
+      final myUid = await AuthService.getOrCreateDeviceUid();
+      final myCode = await SecureKeyStorage.getMyConnectCode() ?? '';
+      final cleanMyCode = myCode.replaceAll(RegExp(r'[^0-9]'), '');
+      final peerUid = await SecureKeyStorage.getPairedUid();
+      final myBundle = await getLocalPublicKeyBundle();
+
+      // 1. Broadcast pairing invitation to peer's inbox channel
+      final inboxChannel = client.channel('pairing_inbox_$cleanPeerCode');
+      await inboxChannel.subscribe();
+      await inboxChannel.sendBroadcastMessage(
+        event: 'pairing_invitation',
+        payload: {
+          'sender_code': cleanMyCode,
+          'sender_uid': myUid,
+          'public_key_bundle': myBundle.toJson(),
+        },
+      );
+
+      // 2. Also broadcast on shared channel
+      if (peerUid != null && peerUid.isNotEmpty) {
+        final participants = [myUid, peerUid]..sort();
+        final sharedChannel = client.channel('chat_shared_${participants.join('_')}');
+        await sharedChannel.subscribe();
+        await sharedChannel.sendBroadcastMessage(
+          event: 'pairing_invitation',
+          payload: {
+            'sender_code': cleanMyCode,
+            'sender_uid': myUid,
+            'public_key_bundle': myBundle.toJson(),
+          },
+        );
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[SignalCrypto] Unilateral pairing broadcast notice: $e');
+      }
+    }
   }
 
   /// Initialize the Double Ratchet state deterministically between two devices.
@@ -752,6 +878,37 @@ class SignalCryptoService {
           );
           return utf8.decode(decryptedBytes);
         } catch (_) {}
+      }
+    } catch (_) {}
+
+    // Strategy 3: Symmetrical Key derived from pairing connect codes
+    try {
+      final myCode = await SecureKeyStorage.getMyConnectCode() ?? '';
+      final peerCode = await SecureKeyStorage.getPeerConnectCode() ?? '';
+      final cleanMy = myCode.replaceAll(RegExp(r'[^0-9]'), '');
+      final cleanPeer = peerCode.replaceAll(RegExp(r'[^0-9]'), '');
+      if (cleanMy.length == 6 && cleanPeer.length == 6) {
+        final codes = [cleanMy, cleanPeer]..sort();
+        final symKey = await _hkdf.deriveKey(
+          secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
+          nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+          info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+        );
+        final symBytes = (await symKey.extractBytes()).sublist(0, 32);
+        for (final aadString in [
+          '${envelope.senderUid}:${envelope.receiverUid}',
+          '${envelope.senderUid}:',
+          '',
+        ]) {
+          try {
+            final decryptedBytes = await _aesGcm.decrypt(
+              secretBox,
+              secretKey: SecretKey(symBytes),
+              aad: aadString.isNotEmpty ? utf8.encode(aadString) : const <int>[],
+            );
+            return utf8.decode(decryptedBytes);
+          } catch (_) {}
+        }
       }
     } catch (_) {}
 

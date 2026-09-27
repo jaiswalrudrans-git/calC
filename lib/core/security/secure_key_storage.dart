@@ -42,6 +42,7 @@ class SecureKeyStorage {
   static const _kRemoteSignedPrekeyId = 'metric_remote_signed_prekey_id';
   static const _kRemoteOneTimePrekey = 'metric_remote_onetime_prekey';
   static const _kRemoteOneTimePrekeyId = 'metric_remote_onetime_prekey_id';
+  static const _kPeerConnectCode = 'metric_peer_connect_code';
 
   static const _kMyDeviceId = 'metric_my_device_uid';
   static const _kMyConnectCode = 'metric_my_connect_code';
@@ -174,6 +175,12 @@ class SecureKeyStorage {
       _storage.read(key: _kRemoteSignedPrekey);
   static Future<String?> getRemoteOneTimePrekey() =>
       _storage.read(key: _kRemoteOneTimePrekey);
+
+  static Future<void> savePeerConnectCode(String code) =>
+      _storage.write(key: _kPeerConnectCode, value: code);
+
+  static Future<String?> getPeerConnectCode() =>
+      _storage.read(key: _kPeerConnectCode);
 
   static Future<bool> isPaired() async {
     final value = await _storage.read(key: _kPairingComplete);
@@ -371,6 +378,7 @@ class SecureKeyStorage {
     await _storage.delete(key: _kMyDeviceId);
     await _storage.delete(key: _kPairingComplete);
     await _storage.delete(key: _kPairedUid);
+    await _storage.delete(key: _kPeerConnectCode);
     await _storage.delete(key: _kRemoteIdentityPublicKey);
     await _storage.delete(key: _kRemoteSigningPublicKey);
     await _storage.delete(key: _kRemoteSignedPrekey);

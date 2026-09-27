@@ -381,7 +381,16 @@ class LocalDatabaseService {
 
   static Future<void> updateMessageStatus(String messageId, String status) async {
     final db = await database;
-    await db.update('messages', {'status': status}, where: 'id = ?', whereArgs: [messageId]);
+    if (status == 'delivered') {
+      await db.update(
+        'messages',
+        {'status': status},
+        where: 'id = ? AND status != "read"',
+        whereArgs: [messageId],
+      );
+    } else {
+      await db.update('messages', {'status': status}, where: 'id = ?', whereArgs: [messageId]);
+    }
   }
 
   static Future<void> markAllSentMessagesAsRead(String peerUid) async {

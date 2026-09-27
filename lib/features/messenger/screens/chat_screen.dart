@@ -28,7 +28,6 @@ class ChatScreen extends ConsumerStatefulWidget {
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
-  final TextEditingController _textController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _inputFocusNode = FocusNode();
@@ -38,32 +37,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String _searchQuery = '';
   String? _highlightedMessageId;
   Timer? _highlightTimer;
-  bool _hasInputText = false;
   bool _isRecordingVoice = false;
   String? _recordFilePath;
   Timer? _recordDurationTimer;
   int _recordSeconds = 0;
   int _previousMessageCount = 0;
 
+  ChatNotifier? _chatNotifier;
+
   @override
   void initState() {
     super.initState();
+    _chatNotifier = ref.read(chatProvider.notifier);
     PrivacyGuard.setScreenProtection(true);
 
     // Notify provider that chat is currently active/open (triggers blue ticks on peer device!)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(chatProvider.notifier).setChatActive(true);
-    });
-
-    _textController.addListener(() {
-      final hasText = _textController.text.trim().isNotEmpty;
-      if (hasText != _hasInputText) {
-        setState(() => _hasInputText = hasText);
-      }
+      _chatNotifier?.setChatActive(true);
     });
 
     _searchController.addListener(() {
       setState(() => _searchQuery = _searchController.text.trim().toLowerCase());
+    });
+
+    // Auto-scroll when keyboard opens so recent messages stay visible above keyboard
+    _inputFocusNode.addListener(() {
+      if (_inputFocusNode.hasFocus) {
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) _scrollToBottom(animate: true);
+        });
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) _scrollToBottom(animate: true);
+        });
+      }
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -73,8 +79,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
-    ref.read(chatProvider.notifier).setChatActive(false);
-    _textController.dispose();
+    _chatNotifier?.setChatActive(false);
     _searchController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
@@ -136,9 +141,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  void _sendMessage() {
-    final text = _textController.text.trim();
-    if (text.isEmpty) return;
+  void _sendMessage(String text) {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
 
     final state = ref.read(chatProvider);
     if (state.peerUid == null || state.peerUid!.isEmpty) {
@@ -151,9 +156,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
-    _textController.clear();
     HapticFeedback.lightImpact();
-    ref.read(chatProvider.notifier).sendMessage(text);
+    ref.read(chatProvider.notifier).sendMessage(clean);
 
     Future.delayed(const Duration(milliseconds: 80), () {
       _scrollToBottom();
@@ -898,74 +902,77 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         }
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: true,
         backgroundColor: isDark ? const Color(0xFF0C0E14) : const Color(0xFFEFEAE2),
         appBar: _isSearching ? _buildSearchAppBar(isDark) : _buildMainAppBar(context, state, isDark),
-        body: SafeArea(
-          child: Column(
-            children: [
-              // Warning Banner if Not Paired
-              if (state.peerUid == null || state.peerUid!.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  color: AppColors.warningAmber.withValues(alpha: 0.15),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warningAmber),
-                      const SizedBox(width: 10),
-                      const Expanded(
-                        child: Text(
-                          'Device not paired with a peer. Tap to pair.',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.warningAmber),
-                        ),
+        body: Column(
+          children: [
+            // Warning Banner if Not Paired
+            if (state.peerUid == null || state.peerUid!.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                color: AppColors.warningAmber.withValues(alpha: 0.15),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warningAmber),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Device not paired with a peer. Tap to pair.',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.warningAmber),
                       ),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                          );
-                        },
-                        child: const Text('View Connect Code', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                      ),
-                    ],
-                  ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                        );
+                      },
+                      child: const Text('View Connect Code', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    ),
+                  ],
                 ),
+              ),
 
-              // Error Banner if error occurred
-              if (state.errorMessage != null)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  color: AppColors.alertRed.withValues(alpha: 0.15),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.error_outline_rounded, size: 16, color: AppColors.alertRed),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          state.errorMessage!,
-                          style: const TextStyle(fontSize: 12, color: AppColors.alertRed, fontWeight: FontWeight.w600),
-                        ),
+            // Error Banner if error occurred
+            if (state.errorMessage != null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: AppColors.alertRed.withValues(alpha: 0.15),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline_rounded, size: 16, color: AppColors.alertRed),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        state.errorMessage!,
+                        style: const TextStyle(fontSize: 12, color: AppColors.alertRed, fontWeight: FontWeight.w600),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 16, color: AppColors.alertRed),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        onPressed: () => ref.read(chatProvider.notifier).clearError(),
-                      ),
-                    ],
-                  ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 16, color: AppColors.alertRed),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () => ref.read(chatProvider.notifier).clearError(),
+                    ),
+                  ],
                 ),
+              ),
 
-              // Message List with Date Separators
-              Expanded(
-                child: state.isLoading && state.messages.isEmpty
-                    ? const Center(child: CircularProgressIndicator())
-                    : filteredMessages.isEmpty
-                        ? _buildEmptyState(isDark)
-                        : ListView.builder(
+            // Message List with Date Separators
+            Expanded(
+              child: state.isLoading && state.messages.isEmpty
+                  ? const Center(child: CircularProgressIndicator())
+                  : filteredMessages.isEmpty
+                      ? _buildEmptyState(isDark)
+                      : GestureDetector(
+                          onTap: () => FocusScope.of(context).unfocus(),
+                          child: ListView.builder(
                             controller: _scrollController,
+                            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                             itemCount: filteredMessages.length,
                             itemBuilder: (context, index) {
@@ -985,15 +992,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               );
                             },
                           ),
-              ),
+                        ),
+            ),
 
-              // Voice Recording Bar or Standard Bottom Input Bar
-              if (_isRecordingVoice)
-                _buildVoiceRecordingBar(isDark)
-              else
-                _buildInputBar(isDark),
-            ],
-          ),
+            // Voice Recording Bar or Standard Bottom Input Bar
+            SafeArea(
+              top: false,
+              bottom: MediaQuery.of(context).viewInsets.bottom == 0,
+              child: _isRecordingVoice
+                  ? _buildVoiceRecordingBar(isDark)
+                  : ChatInputBar(
+                      isDark: isDark,
+                      focusNode: _inputFocusNode,
+                      onSend: _sendMessage,
+                      onAttachmentTap: _showAttachmentSheet,
+                      onCameraTap: () {
+                        HapticFeedback.lightImpact();
+                        _pickAndSendCamera();
+                      },
+                      onVoiceRecordStart: _startVoiceRecord,
+                      onVoiceRecordStopAndSend: _stopVoiceRecordAndSend,
+                    ),
+            ),
+          ],
         ),
       ),
     );
@@ -1347,44 +1368,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                       if (msg.isMe) ...[
                         const SizedBox(width: 4),
-                        if (msg.status == 'sending')
-                          const SizedBox(
-                            width: 10,
-                            height: 10,
-                            child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey),
-                          )
-                        else if (msg.status == 'failed')
-                          GestureDetector(
-                            onTap: () {
-                              HapticFeedback.mediumImpact();
-                              ref.read(chatProvider.notifier).retryMessage(msg.id);
-                            },
-                            child: const Row(
-                              children: [
-                                Icon(Icons.error_outline_rounded, size: 13, color: AppColors.alertRed),
-                                SizedBox(width: 2),
-                                Text('Retry', style: TextStyle(fontSize: 10, color: AppColors.alertRed)),
-                              ],
-                            ),
-                          )
-                        else if (msg.status == 'read')
-                          const Icon(
-                            Icons.done_all_rounded,
-                            size: 14,
-                            color: Color(0xFF53BDEB), // WhatsApp blue ticks (opened & seen)
-                          )
-                        else if (msg.status == 'delivered')
-                          Icon(
-                            Icons.done_all_rounded,
-                            size: 14,
-                            color: isDark ? Colors.white60 : Colors.black45, // Double GREY ticks
-                          )
-                        else
-                          Icon(
-                            Icons.done_rounded,
-                            size: 14,
-                            color: isDark ? Colors.white60 : Colors.black45, // Single GREY tick (not yet seen)
-                          ),
+                        _buildStatusIndicator(msg, isDark),
                       ],
                     ],
                   ),
@@ -1395,6 +1379,52 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildStatusIndicator(LocalChatMessage msg, bool isDark) {
+    if (msg.status == 'sending') {
+      return const SizedBox(
+        width: 10,
+        height: 10,
+        child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey),
+      );
+    } else if (msg.status == 'failed') {
+      return GestureDetector(
+        onTap: () {
+          HapticFeedback.mediumImpact();
+          ref.read(chatProvider.notifier).retryMessage(msg.id);
+        },
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline_rounded, size: 13, color: AppColors.alertRed),
+            SizedBox(width: 2),
+            Text('Retry', style: TextStyle(fontSize: 10, color: AppColors.alertRed)),
+          ],
+        ),
+      );
+    } else if (msg.status == 'read') {
+      // Double BLUE tick: message has been opened and read by peer
+      return const Icon(
+        Icons.done_all_rounded,
+        size: 15,
+        color: Color(0xFF34B7F1), // WhatsApp blue ticks
+      );
+    } else if (msg.status == 'delivered') {
+      // Double GREY tick: message delivered to peer device
+      return Icon(
+        Icons.done_all_rounded,
+        size: 15,
+        color: isDark ? Colors.white54 : Colors.black45, // WhatsApp grey double tick
+      );
+    } else {
+      // Single GREY tick: message sent to backend but not yet delivered
+      return Icon(
+        Icons.done_rounded,
+        size: 15,
+        color: isDark ? Colors.white54 : Colors.black45, // WhatsApp grey single tick
+      );
+    }
   }
 
   Widget _buildBubbleContent(LocalChatMessage msg, bool isDark) {
@@ -1686,7 +1716,72 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  Widget _buildInputBar(bool isDark) {
+}
+
+/// Isolated, high-performance input bar widget.
+/// Manages its own local TextEditingController and state so that keystrokes
+/// ONLY rebuild this input area and NEVER trigger rebuilds of the message list or parent screen.
+class ChatInputBar extends StatefulWidget {
+  final bool isDark;
+  final FocusNode focusNode;
+  final ValueChanged<String> onSend;
+  final VoidCallback onAttachmentTap;
+  final VoidCallback onCameraTap;
+  final VoidCallback onVoiceRecordStart;
+  final VoidCallback onVoiceRecordStopAndSend;
+
+  const ChatInputBar({
+    super.key,
+    required this.isDark,
+    required this.focusNode,
+    required this.onSend,
+    required this.onAttachmentTap,
+    required this.onCameraTap,
+    required this.onVoiceRecordStart,
+    required this.onVoiceRecordStopAndSend,
+  });
+
+  @override
+  State<ChatInputBar> createState() => _ChatInputBarState();
+}
+
+class _ChatInputBarState extends State<ChatInputBar> {
+  final TextEditingController _controller = TextEditingController();
+  bool _hasInputText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onTextChanged);
+  }
+
+  void _onTextChanged() {
+    final hasText = _controller.text.trim().isNotEmpty;
+    if (hasText != _hasInputText) {
+      setState(() {
+        _hasInputText = hasText;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onTextChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    _controller.clear();
+    widget.onSend(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       decoration: BoxDecoration(
@@ -1703,7 +1798,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         children: [
           // Attachment (+) button
           IconButton(
-            onPressed: _showAttachmentSheet,
+            onPressed: widget.onAttachmentTap,
             icon: const Icon(Icons.add_circle_outline_rounded, size: 26),
             color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
             padding: const EdgeInsets.all(8),
@@ -1724,8 +1819,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 children: [
                   Expanded(
                     child: TextField(
-                      controller: _textController,
-                      focusNode: _inputFocusNode,
+                      controller: _controller,
+                      focusNode: widget.focusNode,
                       textCapitalization: TextCapitalization.sentences,
                       maxLines: 5,
                       minLines: 1,
@@ -1742,15 +1837,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                         border: InputBorder.none,
                       ),
-                      onSubmitted: (_) => _sendMessage(),
+                      onSubmitted: (_) => _submit(),
                     ),
                   ),
                   // Camera Icon button inside text input
                   IconButton(
-                    onPressed: () {
-                      HapticFeedback.lightImpact();
-                      _pickAndSendCamera();
-                    },
+                    onPressed: widget.onCameraTap,
                     icon: const Icon(Icons.camera_alt_rounded, size: 22),
                     color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
                     padding: const EdgeInsets.all(8),
@@ -1767,7 +1859,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           // Send Button OR Mic Button
           if (_hasInputText)
             IconButton.filled(
-              onPressed: _sendMessage,
+              onPressed: _submit,
               icon: const Icon(Icons.arrow_upward_rounded, size: 20),
               style: IconButton.styleFrom(
                 backgroundColor: AppColors.primary,
@@ -1777,8 +1869,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             )
           else
             GestureDetector(
-              onLongPress: _startVoiceRecord,
-              onLongPressUp: _stopVoiceRecordAndSend,
+              onLongPress: widget.onVoiceRecordStart,
+              onLongPressUp: widget.onVoiceRecordStopAndSend,
               child: IconButton.filled(
                 onPressed: () {
                   HapticFeedback.lightImpact();

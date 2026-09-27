@@ -1,5 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/config/supabase_config.dart';
+import '../../../core/security/auth_service.dart';
 import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
 import '../../../core/theme/app_colors.dart';
@@ -27,10 +31,26 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
   String? _peerUid;
   bool _isLoading = true;
 
+  RealtimeChannel? _pairingSubscription;
+  Timer? _inboxPollTimer;
+
   @override
   void initState() {
     super.initState();
     _loadState();
+  }
+
+  @override
+  void dispose() {
+    _inboxPollTimer?.cancel();
+    final client = SupabaseConfig.client;
+    if (client != null && _pairingSubscription != null) {
+      try {
+        client.removeChannel(_pairingSubscription!);
+      } catch (_) {}
+      _pairingSubscription = null;
+    }
+    super.dispose();
   }
 
   Future<void> _loadState() async {
@@ -48,6 +68,119 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
         _isLoading = false;
       });
     }
+
+    // Publish this device's connect code to Supabase pairing_exchange registry
+    if (code.isNotEmpty) {
+      unawaited(SignalCryptoService.publishMyConnectCode());
+      _setupPairingInboxListener(code);
+    }
+
+    // Check for incoming pairing invitations or pending messages from peers
+    _checkIncomingPairingRequests();
+  }
+
+  void _setupPairingInboxListener(String code) {
+    final cleanCode = code.replaceAll(RegExp(r'[^0-9]'), '');
+    if (cleanCode.length != 6) return;
+
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+
+    if (_pairingSubscription != null) {
+      try {
+        client.removeChannel(_pairingSubscription!);
+      } catch (_) {}
+      _pairingSubscription = null;
+    }
+
+    final channel = client.channel('pairing_inbox_$cleanCode');
+    _pairingSubscription = channel;
+
+    channel.onBroadcast(
+      event: 'pairing_invitation',
+      callback: (payload) async {
+        final senderCode = payload['sender_code'] as String?;
+        final senderUid = payload['sender_uid'] as String?;
+        final pkBundle = payload['public_key_bundle'] as Map<String, dynamic>?;
+
+        if (senderCode != null && senderCode.isNotEmpty) {
+          await SignalCryptoService.pairWithConnectCode(
+            senderCode,
+            explicitPeerUid: senderUid,
+            explicitPeerPublicKeyHex: pkBundle?['identity_key'] as String?,
+          );
+          if (mounted) {
+            final currentPeer = await SecureKeyStorage.getPairedUid();
+            setState(() {
+              _isPaired = true;
+              _peerUid = currentPeer;
+            });
+            HapticFeedback.mediumImpact();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    const Icon(Icons.link_rounded, color: Colors.white, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text('Device $senderCode connected with you!')),
+                  ],
+                ),
+                backgroundColor: AppColors.secureGreen,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            );
+          }
+        }
+      },
+    );
+
+    channel.subscribe();
+
+    _inboxPollTimer?.cancel();
+    _inboxPollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) _checkIncomingPairingRequests();
+    });
+  }
+
+  Future<void> _checkIncomingPairingRequests() async {
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+
+    try {
+      final myUid = await AuthService.getOrCreateDeviceUid();
+      final paired = await SecureKeyStorage.isPaired();
+
+      if (paired) return;
+
+      final rows = await client
+          .from('messages')
+          .select('sender_uid')
+          .eq('recipient_uid', myUid)
+          .limit(5);
+
+      if (rows.isNotEmpty) {
+        final firstSender = rows.first['sender_uid'] as String?;
+        if (firstSender != null && firstSender.isNotEmpty) {
+          final peRow = await client.from('pairing_exchange').select().eq('uid', firstSender).maybeSingle();
+          if (peRow != null) {
+            final senderCode = peRow['code'].toString();
+            final pkBundle = peRow['public_key_bundle'] as Map<String, dynamic>?;
+            await SignalCryptoService.pairWithConnectCode(
+              senderCode,
+              explicitPeerUid: firstSender,
+              explicitPeerPublicKeyHex: pkBundle?['identity_key'] as String?,
+            );
+            if (mounted) {
+              setState(() {
+                _isPaired = true;
+                _peerUid = firstSender;
+              });
+            }
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   void _copyConnectCode() {
@@ -263,7 +396,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
 
                                   setSheetState(() => isConnecting = true);
                                   try {
-                                    await SignalCryptoService.pairWithConnectCode(digits);
+                                    await SignalCryptoService.initiateUnilateralPairing(digits);
                                     HapticFeedback.mediumImpact();
                                     if (context.mounted) {
                                       Navigator.pop(ctx);

@@ -149,30 +149,36 @@ class AccountAuthService {
   }
 
   /// Derive or create a stable permanent UID for an account.
-  /// Mapped from email: username@metricapp.local under the hood.
-  /// Generates a deterministic RFC-4122 v5 UUID offline or resolves Supabase/Firebase Auth UID online.
+  /// Uses Supabase Anonymous Auth to get a real auth.uid() that passes RLS policies.
+  /// The auth UID is stored permanently so the same UID is reused across sessions.
   static Future<String> _resolveStableUid(String username, String password) async {
     final u = normalizeUsername(username);
-    final email = '$u@metricapp.local';
 
-    final client = SupabaseConfig.client;
-    if (client != null) {
-      try {
-        final authRes = await client.auth.signUp(email: email, password: password);
-        if (authRes.user != null) {
-          return authRes.user!.id;
-        }
-      } catch (_) {
-        try {
-          final signInRes = await client.auth.signInWithPassword(email: email, password: password);
-          if (signInRes.user != null) {
-            return signInRes.user!.id;
-          }
-        } catch (_) {}
-      }
+    // 1. Check if this user already has a stored UID
+    final existingUid = await _storage.read(key: 'metric_auth_user_${u}_uid');
+    if (existingUid != null && existingUid.isNotEmpty) {
+      return existingUid;
     }
 
-    // Deterministic v5 UUID based on username guarantees the exact same stable UID
+    // 2. Try Supabase Anonymous Auth to get a real auth.uid()
+    //    This UID is essential for RLS — sender_uid MUST equal auth.uid()
+    final client = SupabaseConfig.client;
+    if (client != null && SupabaseConfig.isConfigured) {
+      try {
+        // If already authenticated, use current UID
+        final currentUser = client.auth.currentUser;
+        if (currentUser != null && currentUser.id.isNotEmpty) {
+          return currentUser.id;
+        }
+
+        final authRes = await client.auth.signInAnonymously();
+        if (authRes.user != null && authRes.user!.id.isNotEmpty) {
+          return authRes.user!.id;
+        }
+      } catch (_) {}
+    }
+
+    // 3. Offline fallback: deterministic v5 UUID (won't work with RLS but prevents crash)
     return _uuid.v5(Namespace.url.value, 'metric:account:$u');
   }
 

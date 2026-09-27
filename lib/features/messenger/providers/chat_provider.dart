@@ -103,6 +103,10 @@ class ChatNotifier extends Notifier<ChatState> {
   /// Initialize local chat state, load SQLite cache, fetch missed messages & start Realtime listener
   Future<void> initChat() async {
     state = state.copyWith(isLoading: true);
+
+    // CRITICAL: Ensure Supabase auth is active FIRST so auth.uid() == myUid
+    await _ensureSupabaseAuthSession();
+
     final myUid = await AuthService.getOrCreateDeviceUid();
     final peerUid = await SecureKeyStorage.getPairedUid();
     final safetyNumber = await SignalCryptoService.getSafetyNumber();
@@ -127,22 +131,94 @@ class ChatNotifier extends Notifier<ChatState> {
       isVerified: isVerified,
     );
 
-    // 2. Fetch any missed messages while offline
+    // 2. If not yet paired, check if an unread message arrived from a peer to auto-pair
+    final client = SupabaseConfig.client;
+    if (peerUid == null && client != null && SupabaseConfig.isConfigured) {
+      try {
+        final rows = await client.from('messages').select('sender_uid').eq('recipient_uid', myUid).limit(1);
+        if (rows.isNotEmpty) {
+          final sender = rows.first['sender_uid'] as String?;
+          if (sender != null && sender.isNotEmpty) {
+            await _autoPairWithSender(sender);
+            return initChat(); // Re-initialize chat now that pairing is established!
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. Fetch any missed messages while offline
     if (peerUid != null) {
       await _fetchMissedMessages(myUid: myUid, peerUid: peerUid);
     }
 
-    // 3. Connect Supabase Realtime listener
+    // 4. Connect Supabase Realtime listener
     if (peerUid != null) {
       _connectRealtime(myUid: myUid, peerUid: peerUid);
 
-      // 4. Background polling fallback every 3 seconds to guarantee 100% reliable delivery
+      // 5. Background polling fallback every 3 seconds to guarantee 100% reliable delivery
       _pollTimer?.cancel();
       _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
         if (state.peerUid != null) {
           _fetchMissedMessages(myUid: state.myUid, peerUid: state.peerUid!);
         }
       });
+    }
+  }
+
+  /// Ensure Supabase auth session is active and auth.uid() matches our stored device UID.
+  /// If auth session expired or UID mismatches, re-authenticate anonymously and
+  /// update the stored device UID to match auth.uid().
+  Future<void> _ensureSupabaseAuthSession() async {
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+
+    final storedUid = await SecureKeyStorage.getMyDeviceId();
+    final currentUser = client.auth.currentUser;
+
+    if (currentUser != null && currentUser.id.isNotEmpty) {
+      // Auth session active
+      if (storedUid == null || storedUid != currentUser.id) {
+        // Stored UID doesn't match auth — update stored UID
+        await SecureKeyStorage.saveMyDeviceId(currentUser.id);
+        // Also re-publish connect code with updated UID
+        unawaited(SignalCryptoService.publishMyConnectCode());
+      }
+      return;
+    }
+
+    // No auth session — sign in anonymously
+    try {
+      final authRes = await client.auth.signInAnonymously();
+      final authUid = authRes.user?.id;
+      if (authUid != null && authUid.isNotEmpty) {
+        if (storedUid == null || storedUid != authUid) {
+          await SecureKeyStorage.saveMyDeviceId(authUid);
+          unawaited(SignalCryptoService.publishMyConnectCode());
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[ChatProvider] Auth session error: $e');
+    }
+  }
+
+  /// Automatically pairs with incoming sender by looking up connect code in pairing_exchange
+  Future<void> _autoPairWithSender(String senderUid) async {
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+    try {
+      final row = await client.from('pairing_exchange').select().eq('uid', senderUid).maybeSingle();
+      if (row != null) {
+        final code = row['code'].toString();
+        final bundleMap = row['public_key_bundle'] as Map<String, dynamic>?;
+        await SignalCryptoService.pairWithConnectCode(
+          code,
+          explicitPeerUid: senderUid,
+          explicitPeerPublicKeyHex: bundleMap?['identity_key'] as String?,
+        );
+        state = state.copyWith(peerUid: senderUid);
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[ChatProvider] Auto-pair error: $e');
     }
   }
 
@@ -162,7 +238,7 @@ class ChatNotifier extends Notifier<ChatState> {
       final channel = client.channel(sharedChannelName);
       _realtimeChannel = channel;
 
-      // 1. Listen for incoming message inserts
+      // 1. Listen for incoming message inserts from Postgres
       channel.onPostgresChanges(
         event: PostgresChangeEvent.insert,
         schema: 'public',
@@ -181,13 +257,42 @@ class ChatNotifier extends Notifier<ChatState> {
         },
       );
 
+      // 1b. Listen for instant Realtime message broadcasts (Dual-channel redundancy)
+      channel.onBroadcast(
+        event: 'new_message',
+        callback: (payload) async {
+          final recipient = payload['recipient_uid'] as String?;
+          final sender = payload['sender_uid'] as String?;
+          if (recipient == myUid && sender == peerUid) {
+            await _processIncomingMessageRow(payload, myUid, peerUid);
+          }
+        },
+      );
+
+      // 1c. Listen for media notification broadcasts (fetches large payloads from Supabase DB)
+      channel.onBroadcast(
+        event: 'new_message_notification',
+        callback: (payload) async {
+          final recipient = payload['recipient_uid'] as String?;
+          final sender = payload['sender_uid'] as String?;
+          if (recipient == myUid && sender == peerUid) {
+            await _fetchMissedMessages(myUid: myUid, peerUid: peerUid);
+          }
+        },
+      );
+
       // 2. Listen for Read Receipts: when peer opens chat, turn ticks to BLUE!
       channel.onBroadcast(
         event: 'read_receipt',
         callback: (payload) async {
           final reader = payload['reader_uid'] as String?;
+          final msgId = payload['msg_id'] as String?;
           if (reader == peerUid) {
-            await LocalDatabaseService.markAllSentMessagesAsRead(peerUid);
+            if (msgId != null && msgId.isNotEmpty) {
+              await LocalDatabaseService.updateMessageStatus(msgId, 'read');
+            } else {
+              await LocalDatabaseService.markAllSentMessagesAsRead(peerUid);
+            }
             final updated = await LocalDatabaseService.getMessages();
             state = state.copyWith(messages: updated);
           }
@@ -199,8 +304,13 @@ class ChatNotifier extends Notifier<ChatState> {
         event: 'delivery_receipt',
         callback: (payload) async {
           final recipient = payload['recipient_uid'] as String?;
+          final msgId = payload['msg_id'] as String?;
           if (recipient == peerUid) {
-            await LocalDatabaseService.markAllSentMessagesAsDelivered(peerUid);
+            if (msgId != null && msgId.isNotEmpty) {
+              await LocalDatabaseService.updateMessageStatus(msgId, 'delivered');
+            } else {
+              await LocalDatabaseService.markAllSentMessagesAsDelivered(peerUid);
+            }
             final updated = await LocalDatabaseService.getMessages();
             state = state.copyWith(messages: updated);
           }
@@ -545,9 +655,13 @@ class ChatNotifier extends Notifier<ChatState> {
       // 6. Write ciphertext to locked-down Supabase messages table
       final client = SupabaseConfig.client;
       if (client != null && SupabaseConfig.isConfigured) {
-        await client.from('messages').insert({
+        // CRITICAL: Ensure auth.uid() matches sender_uid for RLS
+        await _ensureSupabaseAuthSession();
+        final authUid = client.auth.currentUser?.id ?? state.myUid;
+
+        final rowData = {
           'id': msgId,
-          'sender_uid': state.myUid,
+          'sender_uid': authUid,
           'recipient_uid': peerUid,
           'ciphertext': signalEnvelope.ciphertextHex,
           'iv': signalEnvelope.ivHex,
@@ -555,7 +669,24 @@ class ChatNotifier extends Notifier<ChatState> {
           'ephemeral_key': signalEnvelope.ephemeralPublicKeyHex,
           'counter': signalEnvelope.counter,
           'timestamp': signalEnvelope.timestamp,
-        });
+        };
+
+        await client.from('messages').insert(rowData);
+
+        // Instant Realtime broadcast (lightweight notification if payload is large)
+        try {
+          if (signalEnvelope.ciphertextHex.length < 65536) {
+            _realtimeChannel?.sendBroadcastMessage(
+              event: 'new_message',
+              payload: rowData,
+            );
+          } else {
+            _realtimeChannel?.sendBroadcastMessage(
+              event: 'new_message_notification',
+              payload: {'msg_id': msgId, 'sender_uid': authUid, 'recipient_uid': peerUid},
+            );
+          }
+        } catch (_) {}
 
         await LocalDatabaseService.updateMessageStatus(msgId, 'sent');
       } else {
@@ -576,7 +707,8 @@ class ChatNotifier extends Notifier<ChatState> {
   /// 1. Immediate optimistic save in local SQLite (status: sending)
   /// 2. Encrypt with Signal session (ZERO plaintext on wire!)
   /// 3. Insert ciphertext into Supabase messages table
-  /// 4. Update status to 'sent' (or 'failed' on network error)
+  /// 4. Broadcast on Realtime channel for instant zero-latency arrival
+  /// 5. Update status to 'sent' (or 'failed' on network error)
   Future<void> sendMessage(String text) async {
     final cleanText = text.trim();
     if (cleanText.isEmpty) return;
@@ -615,9 +747,13 @@ class ChatNotifier extends Notifier<ChatState> {
       // 3. Write ciphertext to locked-down Supabase messages table
       final client = SupabaseConfig.client;
       if (client != null && SupabaseConfig.isConfigured) {
-        await client.from('messages').insert({
+        // CRITICAL: Ensure auth.uid() matches sender_uid for RLS
+        await _ensureSupabaseAuthSession();
+        final authUid = client.auth.currentUser?.id ?? state.myUid;
+
+        final rowData = {
           'id': msgId,
-          'sender_uid': state.myUid,
+          'sender_uid': authUid,
           'recipient_uid': peerUid,
           'ciphertext': envelope.ciphertextHex,
           'iv': envelope.ivHex,
@@ -625,7 +761,17 @@ class ChatNotifier extends Notifier<ChatState> {
           'ephemeral_key': envelope.ephemeralPublicKeyHex,
           'counter': envelope.counter,
           'timestamp': envelope.timestamp,
-        });
+        };
+
+        await client.from('messages').insert(rowData);
+
+        // Instant Realtime broadcast to peer
+        try {
+          _realtimeChannel?.sendBroadcastMessage(
+            event: 'new_message',
+            payload: rowData,
+          );
+        } catch (_) {}
 
         // 4. Update status to 'sent'
         await LocalDatabaseService.updateMessageStatus(msgId, 'sent');
@@ -667,9 +813,13 @@ class ChatNotifier extends Notifier<ChatState> {
 
       final client = SupabaseConfig.client;
       if (client != null && SupabaseConfig.isConfigured) {
+        // CRITICAL: Ensure auth.uid() matches sender_uid for RLS
+        await _ensureSupabaseAuthSession();
+        final authUid = client.auth.currentUser?.id ?? state.myUid;
+
         await client.from('messages').upsert({
           'id': msgId,
-          'sender_uid': state.myUid,
+          'sender_uid': authUid,
           'recipient_uid': peerUid,
           'ciphertext': envelope.ciphertextHex,
           'iv': envelope.ivHex,
