@@ -1,8 +1,9 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
+import '../../../core/config/supabase_config.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/security/auth_service.dart';
 import '../../../core/security/secure_key_storage.dart';
@@ -14,8 +15,10 @@ class ChatState {
   final String myUid;
   final String? peerUid;
   final String? channelId;
-  final int disappearingSeconds; // 0 = off, 86400 = 1 day, 604800 = 7 days
-  final LocalChatMessage? replyingTo;
+  final bool isRealtimeConnected;
+  final String? errorMessage;
+  final String? safetyNumber;
+  final bool isVerified;
 
   const ChatState({
     this.isLoading = false,
@@ -23,8 +26,10 @@ class ChatState {
     this.myUid = '',
     this.peerUid,
     this.channelId,
-    this.disappearingSeconds = 0,
-    this.replyingTo,
+    this.isRealtimeConnected = false,
+    this.errorMessage,
+    this.safetyNumber,
+    this.isVerified = false,
   });
 
   ChatState copyWith({
@@ -33,8 +38,10 @@ class ChatState {
     String? myUid,
     String? peerUid,
     String? channelId,
-    int? disappearingSeconds,
-    LocalChatMessage? replyingTo,
+    bool? isRealtimeConnected,
+    String? errorMessage,
+    String? safetyNumber,
+    bool? isVerified,
   }) {
     return ChatState(
       isLoading: isLoading ?? this.isLoading,
@@ -42,32 +49,50 @@ class ChatState {
       myUid: myUid ?? this.myUid,
       peerUid: peerUid ?? this.peerUid,
       channelId: channelId ?? this.channelId,
-      disappearingSeconds: disappearingSeconds ?? this.disappearingSeconds,
-      replyingTo: replyingTo,
+      isRealtimeConnected: isRealtimeConnected ?? this.isRealtimeConnected,
+      errorMessage: errorMessage,
+      safetyNumber: safetyNumber ?? this.safetyNumber,
+      isVerified: isVerified ?? this.isVerified,
     );
   }
 }
 
 class ChatNotifier extends Notifier<ChatState> {
-  StreamSubscription? _firestoreSubscription;
-  Timer? _cleanupTimer;
+  RealtimeChannel? _realtimeChannel;
+  Timer? _pollTimer;
+  static const _uuid = Uuid();
 
   @override
   ChatState build() {
     ref.onDispose(() {
-      _firestoreSubscription?.cancel();
-      _cleanupTimer?.cancel();
+      _cleanup();
     });
 
-    initChat();
-    return const ChatState();
+    Future.microtask(() => initChat());
+    return const ChatState(isLoading: true);
   }
 
+  void _cleanup() {
+    try {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      if (_realtimeChannel != null) {
+        final client = SupabaseConfig.client;
+        if (client != null) {
+          client.removeChannel(_realtimeChannel!);
+        }
+        _realtimeChannel = null;
+      }
+    } catch (_) {}
+  }
+
+  /// Initialize local chat state, load SQLite cache, fetch missed messages & start Realtime listener
   Future<void> initChat() async {
     state = state.copyWith(isLoading: true);
     final myUid = await AuthService.getOrCreateDeviceUid();
     final peerUid = await SecureKeyStorage.getPairedUid();
-    final timerSeconds = await SecureKeyStorage.getDisappearingTimerSeconds();
+    final safetyNumber = await SignalCryptoService.getSafetyNumber();
+    final isVerified = await SecureKeyStorage.isSafetyNumberVerified();
 
     String? channelId;
     if (peerUid != null) {
@@ -75,7 +100,7 @@ class ChatNotifier extends Notifier<ChatState> {
       channelId = 'ch_${participants.join('_')}';
     }
 
-    // Load local messages first
+    // 1. Load local messages from secure SQLite cache
     final localMsgs = await LocalDatabaseService.getMessages();
 
     state = state.copyWith(
@@ -83,159 +108,303 @@ class ChatNotifier extends Notifier<ChatState> {
       myUid: myUid,
       peerUid: peerUid,
       channelId: channelId,
-      disappearingSeconds: timerSeconds,
       messages: localMsgs,
+      safetyNumber: safetyNumber,
+      isVerified: isVerified,
     );
 
-    // Start realtime listener if Firestore & Channel are active
-    if (Firebase.apps.isNotEmpty && channelId != null) {
-      _listenToFirestoreChannel(channelId, myUid);
+    // 2. Fetch any missed messages while offline
+    if (peerUid != null) {
+      await _fetchMissedMessages(myUid: myUid, peerUid: peerUid);
     }
 
-    // Periodic cleanup of expired ephemeral messages
-    _cleanupTimer?.cancel();
-    _cleanupTimer = Timer.periodic(const Duration(seconds: 15), (_) => _purgeExpired());
+    // 3. Connect Supabase Realtime listener
+    if (peerUid != null) {
+      _connectRealtime(myUid: myUid, peerUid: peerUid);
+
+      // 4. Background polling fallback every 3 seconds to guarantee 100% reliable delivery
+      _pollTimer?.cancel();
+      _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+        if (state.peerUid != null) {
+          _fetchMissedMessages(myUid: state.myUid, peerUid: state.peerUid!);
+        }
+      });
+    }
   }
 
-  void _listenToFirestoreChannel(String channelId, String myUid) {
-    _firestoreSubscription?.cancel();
+  /// Supabase Realtime listener for incoming ciphertext messages
+  void _connectRealtime({required String myUid, required String peerUid}) {
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+
     try {
-      final ref = FirebaseFirestore.instance
-          .collection('channels')
-          .doc(channelId)
-          .collection('messages')
-          .orderBy('timestamp', descending: false);
+      if (_realtimeChannel != null) {
+        client.removeChannel(_realtimeChannel!);
+        _realtimeChannel = null;
+      }
 
-      _firestoreSubscription = ref.snapshots().listen((snapshot) async {
-        for (final docChange in snapshot.docChanges) {
-          if (docChange.type == DocumentChangeType.added) {
-            final data = docChange.doc.data();
-            if (data == null) continue;
+      final channel = client.channel('chat_realtime_$myUid');
+      _realtimeChannel = channel;
 
-            final sender = data['senderUid'] as String? ?? '';
-            // Only process messages from peer (local messages are already saved locally)
-            if (sender != myUid) {
-              final envelope = EncryptedMessageEnvelope.fromFirestore(data);
-              // Check expiration
-              if (envelope.expiresAt != null &&
-                  DateTime.now().millisecondsSinceEpoch > envelope.expiresAt!) {
-                continue; // Expired
-              }
+      // Listen to insert events without client-side column filters (Supabase RLS handles authorization)
+      channel.onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'messages',
+        callback: (payload) async {
+          final row = payload.newRecord;
+          if (row.isEmpty) return;
 
-              // Decrypt client-side using Signal Double Ratchet
-              final decryptedText = await SignalCryptoService.decryptPayload(envelope);
+          final recipient = row['recipient_uid'] as String?;
+          final sender = row['sender_uid'] as String?;
 
-              final localMsg = LocalChatMessage(
-                id: docChange.doc.id,
-                senderUid: sender,
-                receiverUid: myUid,
-                text: decryptedText,
-                timestamp: envelope.timestamp,
-                expiresAt: envelope.expiresAt,
-                isMe: false,
-                mediaType: data['mediaType'] as String?,
-              );
+          // Accept only messages addressed to this device from the paired peer
+          if (recipient == myUid && sender == peerUid) {
+            await _processIncomingMessageRow(row, myUid, peerUid);
+          }
+        },
+      ).subscribe();
 
-              await LocalDatabaseService.saveMessage(localMsg);
-            }
+      state = state.copyWith(isRealtimeConnected: true);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[ChatProvider] Realtime connect notice: $e');
+      }
+    }
+  }
+
+  /// Process an incoming message row: decrypt with Signal ratchet & persist in local SQLite
+  Future<void> _processIncomingMessageRow(
+    Map<String, dynamic> row,
+    String myUid,
+    String peerUid,
+  ) async {
+    final msgId = row['id'] as String?;
+    if (msgId == null) return;
+
+    // Check if already processed
+    final existing = state.messages.any((m) => m.id == msgId);
+    if (existing) return;
+
+    try {
+      // Decrypt client-side using Signal Double Ratchet session
+      final envelope = EncryptedMessageEnvelope.fromMap(row);
+      final decryptedText = await SignalCryptoService.decryptPayload(envelope);
+
+      final localMsg = LocalChatMessage(
+        id: msgId,
+        senderUid: peerUid,
+        receiverUid: myUid,
+        text: decryptedText,
+        timestamp: (row['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
+        isMe: false,
+        status: 'sent',
+      );
+
+      // Cache decrypted message in local SQLite database
+      await LocalDatabaseService.saveMessage(localMsg);
+      final updated = await LocalDatabaseService.getMessages();
+      state = state.copyWith(messages: updated);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[ChatProvider] Decrypt message error: $e');
+      }
+    }
+  }
+
+  /// Fetch messages from Supabase that arrived while device was offline or if Realtime dropped
+  Future<void> _fetchMissedMessages({required String myUid, required String peerUid}) async {
+    final client = SupabaseConfig.client;
+    if (client == null || !SupabaseConfig.isConfigured) return;
+
+    try {
+      final rows = await client
+          .from('messages')
+          .select()
+          .eq('recipient_uid', myUid)
+          .eq('sender_uid', peerUid)
+          .order('timestamp', ascending: true);
+
+      bool hasNew = false;
+      for (final row in rows) {
+        final msgId = row['id'] as String?;
+        if (msgId == null) continue;
+
+        final alreadyCached = state.messages.any((m) => m.id == msgId);
+        if (!alreadyCached) {
+          try {
+            final envelope = EncryptedMessageEnvelope.fromMap(row);
+            final decryptedText = await SignalCryptoService.decryptPayload(envelope);
+
+            final localMsg = LocalChatMessage(
+              id: msgId,
+              senderUid: peerUid,
+              receiverUid: myUid,
+              text: decryptedText,
+              timestamp: (row['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
+              isMe: false,
+              status: 'sent',
+            );
+            await LocalDatabaseService.saveMessage(localMsg);
+            hasNew = true;
+          } catch (e) {
+            if (kDebugMode) debugPrint('[ChatProvider] Parse message error: $e');
           }
         }
+      }
 
-        // Refresh UI list
-        final updatedMsgs = await LocalDatabaseService.getMessages();
-        state = state.copyWith(messages: updatedMsgs);
-      });
-    } catch (_) {
-      // Offline fallback
+      if (hasNew) {
+        final updated = await LocalDatabaseService.getMessages();
+        state = state.copyWith(messages: updated);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[ChatProvider] Fetch missed messages notice: $e');
+      }
     }
   }
 
   /// Send an End-to-End Encrypted Message
-  Future<void> sendMessage(String text, {String? mediaType}) async {
-    if (text.trim().isEmpty && mediaType == null) return;
+  /// 1. Immediate optimistic save in local SQLite (status: sending)
+  /// 2. Encrypt with Signal session (ZERO plaintext on wire!)
+  /// 3. Insert ciphertext into Supabase messages table
+  /// 4. Update status to 'sent' (or 'failed' on network error)
+  Future<void> sendMessage(String text) async {
+    final cleanText = text.trim();
+    if (cleanText.isEmpty) return;
+
+    final peerUid = state.peerUid;
+    if (peerUid == null || peerUid.isEmpty) {
+      state = state.copyWith(errorMessage: 'Cannot send: Device is not paired with a peer.');
+      return;
+    }
+
     final now = DateTime.now().millisecondsSinceEpoch;
-    final msgId = const Uuid().v4();
-    final peerUid = state.peerUid ?? 'peer_device';
+    final msgId = _uuid.v4();
 
-    final expiresAt = state.disappearingSeconds > 0
-        ? now + (state.disappearingSeconds * 1000)
-        : null;
-
-    // 1. Client-Side E2E Encryption (Signal Double Ratchet)
-    final envelope = await SignalCryptoService.encryptPayload(
-      plaintext: text,
-      senderUid: state.myUid,
-      receiverUid: peerUid,
-      disappearingDurationSeconds: state.disappearingSeconds,
-    );
-
-    // 2. Save locally decrypted copy in secure SQLite cache
-    final localMsg = LocalChatMessage(
+    // 1. Immediate optimistic local save with 'sending' status
+    final pendingMsg = LocalChatMessage(
       id: msgId,
       senderUid: state.myUid,
       receiverUid: peerUid,
-      text: text,
+      text: cleanText,
       timestamp: now,
-      expiresAt: expiresAt,
       isMe: true,
-      mediaType: mediaType,
+      status: 'sending',
     );
-    await LocalDatabaseService.saveMessage(localMsg);
+    await LocalDatabaseService.saveMessage(pendingMsg);
+    var updated = await LocalDatabaseService.getMessages();
+    state = state.copyWith(messages: updated, errorMessage: null);
 
-    // 3. Write CIPHERTEXT ONLY to Firestore channel
-    if (Firebase.apps.isNotEmpty && state.channelId != null) {
-      try {
-        final firestoreData = envelope.toFirestoreMap();
-        if (mediaType != null) firestoreData['mediaType'] = mediaType;
-        firestoreData['participants'] = [state.myUid, peerUid];
+    // 2. Encrypt client-side using Signal session (ZERO plaintext on wire!)
+    try {
+      final envelope = await SignalCryptoService.encryptPayload(
+        plaintext: cleanText,
+        senderUid: state.myUid,
+        receiverUid: peerUid,
+      );
 
-        await FirebaseFirestore.instance
-            .collection('channels')
-            .doc(state.channelId)
-            .collection('messages')
-            .doc(msgId)
-            .set(firestoreData);
-      } catch (_) {
-        // Transparent offline handling
+      // 3. Write ciphertext to locked-down Supabase messages table
+      final client = SupabaseConfig.client;
+      if (client != null && SupabaseConfig.isConfigured) {
+        await client.from('messages').insert({
+          'id': msgId,
+          'sender_uid': state.myUid,
+          'recipient_uid': peerUid,
+          'ciphertext': envelope.ciphertextHex,
+          'iv': envelope.ivHex,
+          'mac': envelope.macHex,
+          'ephemeral_key': envelope.ephemeralPublicKeyHex,
+          'counter': envelope.counter,
+          'timestamp': envelope.timestamp,
+        });
+
+        // 4. Update status to 'sent'
+        await LocalDatabaseService.updateMessageStatus(msgId, 'sent');
+      } else {
+        await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+        state = state.copyWith(errorMessage: 'Network error: Supabase not connected.');
       }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[ChatProvider] Send error: $e');
+      }
+      await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+      state = state.copyWith(errorMessage: 'Failed to deliver message: $e');
     }
 
-    final updated = await LocalDatabaseService.getMessages();
-    state = state.copyWith(messages: updated, replyingTo: null);
-  }
-
-  Future<void> setReaction(String messageId, String? reaction) async {
-    await LocalDatabaseService.updateReaction(messageId, reaction);
-    final updated = await LocalDatabaseService.getMessages();
+    updated = await LocalDatabaseService.getMessages();
     state = state.copyWith(messages: updated);
   }
 
-  Future<void> setDisappearingTimer(int seconds) async {
-    await SecureKeyStorage.setDisappearingTimerSeconds(seconds);
-    state = state.copyWith(disappearingSeconds: seconds);
+  /// Retry sending a failed message
+  Future<void> retryMessage(String msgId) async {
+    final msg = state.messages.firstWhere((m) => m.id == msgId);
+    if (!msg.isMe || msg.status != 'failed') return;
+
+    final peerUid = state.peerUid;
+    if (peerUid == null) return;
+
+    // Mark as sending
+    await LocalDatabaseService.updateMessageStatus(msgId, 'sending');
+    var updated = await LocalDatabaseService.getMessages();
+    state = state.copyWith(messages: updated);
+
+    try {
+      final envelope = await SignalCryptoService.encryptPayload(
+        plaintext: msg.text,
+        senderUid: state.myUid,
+        receiverUid: peerUid,
+      );
+
+      final client = SupabaseConfig.client;
+      if (client != null && SupabaseConfig.isConfigured) {
+        await client.from('messages').upsert({
+          'id': msgId,
+          'sender_uid': state.myUid,
+          'recipient_uid': peerUid,
+          'ciphertext': envelope.ciphertextHex,
+          'iv': envelope.ivHex,
+          'mac': envelope.macHex,
+          'ephemeral_key': envelope.ephemeralPublicKeyHex,
+          'counter': envelope.counter,
+          'timestamp': envelope.timestamp,
+        });
+
+        await LocalDatabaseService.updateMessageStatus(msgId, 'sent');
+      } else {
+        await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+      }
+    } catch (e) {
+      await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+    }
+
+    updated = await LocalDatabaseService.getMessages();
+    state = state.copyWith(messages: updated);
   }
 
-  void setReplyingTo(LocalChatMessage? msg) {
-    state = state.copyWith(replyingTo: msg);
+  /// Toggle safety number verification status
+  Future<void> toggleSafetyVerification() async {
+    final next = !state.isVerified;
+    await SecureKeyStorage.setSafetyNumberVerified(next);
+    state = state.copyWith(isVerified: next);
   }
 
+  /// Refresh safety number
+  Future<void> refreshSafetyNumber() async {
+    final sn = await SignalCryptoService.getSafetyNumber();
+    final verified = await SecureKeyStorage.isSafetyNumberVerified();
+    state = state.copyWith(safetyNumber: sn, isVerified: verified);
+  }
+
+  /// Clear error message
+  void clearError() {
+    state = state.copyWith(errorMessage: null);
+  }
+
+  /// Delete message from local storage
   Future<void> deleteMessage(String id) async {
     await LocalDatabaseService.deleteMessage(id);
-    if (Firebase.apps.isNotEmpty && state.channelId != null) {
-      try {
-        await FirebaseFirestore.instance
-            .collection('channels')
-            .doc(state.channelId)
-            .collection('messages')
-            .doc(id)
-            .delete();
-      } catch (_) {}
-    }
-    final updated = await LocalDatabaseService.getMessages();
-    state = state.copyWith(messages: updated);
-  }
-
-  Future<void> _purgeExpired() async {
     final updated = await LocalDatabaseService.getMessages();
     state = state.copyWith(messages: updated);
   }

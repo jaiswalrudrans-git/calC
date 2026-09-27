@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../core/security/secure_key_storage.dart';
+import '../../../core/security/signal_crypto.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../pairing/screens/pairing_screen.dart';
@@ -17,6 +19,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _autoLockSeconds = 30;
   bool _isPaired = false;
   String _deviceUid = '';
+  String? _peerUid;
+  String? _safetyNumber;
+  bool _isSafetyVerified = false;
   bool _driveBackupEnabled = false;
 
   @override
@@ -30,6 +35,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final autoLock = await SecureKeyStorage.getAutoLockSeconds();
     final paired = await SecureKeyStorage.isPaired();
     final uid = await SecureKeyStorage.getMyDeviceId() ?? 'Not Initialized';
+    final peer = await SecureKeyStorage.getPairedUid();
+    final safety = await SignalCryptoService.getSafetyNumber();
+    final verified = await SecureKeyStorage.isSafetyNumberVerified();
 
     if (mounted) {
       setState(() {
@@ -37,6 +45,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _autoLockSeconds = autoLock;
         _isPaired = paired;
         _deviceUid = uid;
+        _peerUid = peer;
+        _safetyNumber = safety;
+        _isSafetyVerified = verified;
       });
     }
   }
@@ -104,6 +115,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  void _showUnpairDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset & Unpair Connection?'),
+        content: const Text(
+          'This will purge all cryptographic identity keys, ratchet session state, and local messages. You and your partner will need to pair again with a new code.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              await SecureKeyStorage.clearAll();
+              await LocalDatabaseService.clearAllMessages();
+              if (ctx.mounted) Navigator.pop(ctx);
+              await _loadSettings();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Pairing session reset. All keys purged.'),
+                    backgroundColor: AppColors.alertRed,
+                  ),
+                );
+              }
+            },
+            child: const Text('Unpair & Reset', style: TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -155,7 +198,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                           ),
                           Text(
-                            _isPaired ? 'Paired with 1 trusted peer' : 'Device not yet paired',
+                            _isPaired
+                                ? (_isSafetyVerified ? 'Paired & Verified with 1 trusted peer' : 'Paired with 1 peer (Unverified)')
+                                : 'Device not yet paired',
                             style: TextStyle(
                               fontSize: 12,
                               color: _isPaired ? AppColors.secureGreen : AppColors.warningAmber,
@@ -179,15 +224,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             const SizedBox(height: 24),
 
-            // Pairing Section
-            _buildSectionHeader('PAIRING & IDENTITY', isDark),
+            // Pairing & Verification Section
+            _buildSectionHeader('PAIRING & IDENTITY VERIFICATION', isDark),
             _buildCard(
               isDark,
               children: [
+                // Pair / Re-pair Tile
                 ListTile(
                   leading: const Icon(Icons.phonelink_ring_rounded, color: AppColors.primary),
                   title: const Text('Pair with Partner Device', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(_isPaired ? 'Tap to view code or re-pair' : 'Exchange keys with your partner'),
+                  subtitle: Text(_isPaired ? 'Paired • Tap to view code or re-pair' : 'Exchange keys with your partner'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     Navigator.push(
@@ -197,14 +243,200 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.fingerprint_rounded, color: AppColors.tealIcon),
-                  title: const Text('My Device UID', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(
-                    _deviceUid.length > 20 ? '${_deviceUid.substring(0, 16)}...' : _deviceUid,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+
+                // My Device UID
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.fingerprint_rounded, size: 18, color: AppColors.tealIcon),
+                              SizedBox(width: 8),
+                              Text('My Device ID', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                            ],
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy_rounded, size: 16),
+                            tooltip: 'Copy My ID',
+                            constraints: const BoxConstraints(),
+                            padding: EdgeInsets.zero,
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: _deviceUid));
+                              HapticFeedback.selectionClick();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('My Device ID copied to clipboard'), duration: Duration(seconds: 1)),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      SelectableText(
+                        _deviceUid,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Speak out or match this ID with your peer to confirm your identity.',
+                        style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                      ),
+                    ],
                   ),
                 ),
+                const Divider(height: 1),
+
+                // Connected Peer UID
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.person_pin_rounded,
+                                size: 18,
+                                color: _isPaired ? AppColors.secureGreen : AppColors.warningAmber,
+                              ),
+                              const SizedBox(width: 8),
+                              const Text('Connected Peer ID', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                            ],
+                          ),
+                          if (_peerUid != null)
+                            IconButton(
+                              icon: const Icon(Icons.copy_rounded, size: 16),
+                              tooltip: 'Copy Peer ID',
+                              constraints: const BoxConstraints(),
+                              padding: EdgeInsets.zero,
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: _peerUid!));
+                                HapticFeedback.selectionClick();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Peer Device ID copied to clipboard'), duration: Duration(seconds: 1)),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      SelectableText(
+                        _peerUid ?? 'No peer connected yet',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          fontWeight: _isPaired ? FontWeight.bold : FontWeight.normal,
+                          color: _isPaired ? AppColors.secureGreen : (isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _isPaired
+                            ? 'Your peer\'s "My Device ID" MUST match this exact value.'
+                            : 'Once paired, your peer\'s cryptographic device ID will appear here.',
+                        style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // 12-Digit Safety Number Card (if paired)
+                if (_isPaired && _safetyNumber != null) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF132A22) : const Color(0xFFE8F5E9),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppColors.secureGreen.withValues(alpha: 0.4)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.shield_rounded, size: 16, color: AppColors.secureGreen),
+                              SizedBox(width: 6),
+                              Text(
+                                '12-DIGIT SAFETY NUMBER',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1.0,
+                                  color: AppColors.secureGreen,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          SelectableText(
+                            _safetyNumber!,
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 3.0,
+                              fontFamily: 'monospace',
+                              color: AppColors.secureGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Read these 12 digits aloud to your partner. If the digits on their screen match yours, you are 100% verified with zero man-in-the-middle.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                          ),
+                          const SizedBox(height: 12),
+                          FilledButton.tonalIcon(
+                            onPressed: () async {
+                              HapticFeedback.mediumImpact();
+                              final next = !_isSafetyVerified;
+                              await SecureKeyStorage.setSafetyNumberVerified(next);
+                              setState(() => _isSafetyVerified = next);
+                            },
+                            icon: Icon(
+                              _isSafetyVerified ? Icons.check_circle_rounded : Icons.verified_outlined,
+                              size: 18,
+                              color: _isSafetyVerified ? AppColors.secureGreen : null,
+                            ),
+                            label: Text(
+                              _isSafetyVerified ? 'Connection Verified ✓' : 'Mark as Verified Partner',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: _isSafetyVerified ? AppColors.secureGreen : null,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+
+                // Reset / Unpair Button
+                if (_isPaired) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.link_off_rounded, color: AppColors.alertRed),
+                    title: const Text('Reset & Unpair Connection', style: TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.w600)),
+                    subtitle: const Text('Clear shared keys and unpair from current peer'),
+                    onTap: _showUnpairDialog,
+                  ),
+                ],
               ],
             ),
 

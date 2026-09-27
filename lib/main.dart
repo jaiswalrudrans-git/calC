@@ -2,7 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'core/config/supabase_config.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'core/theme/app_theme.dart';
 import 'core/security/signal_crypto.dart';
@@ -43,16 +44,23 @@ void main() async {
 
 Future<void> _initializeBackgroundServices() async {
   try {
-    if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp();
+    if (SupabaseConfig.isConfigured) {
+      await Supabase.initialize(
+        url: SupabaseConfig.url,
+        anonKey: SupabaseConfig.anonKey,
+      );
     }
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('[Metric Supabase Init] $e');
+  }
 
   try {
-    await SignalCryptoService.ensureIdentityKeys();
+    await SignalCryptoService.ensurePrekeyBundle();
     await AuthService.getOrCreateDeviceUid();
     await PrivacyGuard.setScreenProtection(true);
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('[Metric Services Init] $e');
+  }
 }
 
 class MetricApp extends StatefulWidget {

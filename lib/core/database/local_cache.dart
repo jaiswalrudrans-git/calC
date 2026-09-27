@@ -10,6 +10,7 @@ class LocalChatMessage {
   final int timestamp;
   final int? expiresAt;
   final bool isMe;
+  final String status; // 'sending', 'sent', 'failed'
   final String? mediaType; // 'photo', 'video', 'voice', null
   final String? reaction;
 
@@ -21,6 +22,7 @@ class LocalChatMessage {
     required this.timestamp,
     this.expiresAt,
     required this.isMe,
+    this.status = 'sent',
     this.mediaType,
     this.reaction,
   });
@@ -34,6 +36,7 @@ class LocalChatMessage {
       'timestamp': timestamp,
       'expiresAt': expiresAt,
       'isMe': isMe ? 1 : 0,
+      'status': status,
       'mediaType': mediaType,
       'reaction': reaction,
     };
@@ -48,6 +51,7 @@ class LocalChatMessage {
       timestamp: map['timestamp'] as int,
       expiresAt: map['expiresAt'] as int?,
       isMe: (map['isMe'] as int) == 1,
+      status: map['status'] as String? ?? 'sent',
       mediaType: map['mediaType'] as String?,
       reaction: map['reaction'] as String?,
     );
@@ -122,7 +126,7 @@ class LocalDatabaseService {
 
       return await openDatabase(
         path,
-        version: 1,
+        version: 2,
         onCreate: (db, version) async {
           await db.execute('''
             CREATE TABLE messages (
@@ -133,6 +137,7 @@ class LocalDatabaseService {
               timestamp INTEGER,
               expiresAt INTEGER,
               isMe INTEGER,
+              status TEXT DEFAULT 'sent',
               mediaType TEXT,
               reaction TEXT
             )
@@ -151,6 +156,18 @@ class LocalDatabaseService {
             )
           ''');
         },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            try {
+              await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
+            } catch (_) {}
+          }
+        },
+        onOpen: (db) async {
+          try {
+            await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
+          } catch (_) {}
+        },
       );
     } catch (_) {
       // In-memory robust fallback for environments without file system write permission
@@ -165,10 +182,14 @@ class LocalDatabaseService {
           timestamp INTEGER,
           expiresAt INTEGER,
           isMe INTEGER,
+          status TEXT DEFAULT 'sent',
           mediaType TEXT,
           reaction TEXT
         )
       ''');
+      try {
+        await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
+      } catch (_) {}
       await db.execute('''
         CREATE TABLE IF NOT EXISTS conversions (
           id TEXT PRIMARY KEY,
@@ -185,14 +206,24 @@ class LocalDatabaseService {
     }
   }
 
-  // --- Chat Operations ---
   static Future<void> saveMessage(LocalChatMessage message) async {
     final db = await database;
-    await db.insert(
-      'messages',
-      message.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    try {
+      await db.insert(
+        'messages',
+        message.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (_) {
+      try {
+        await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
+      } catch (_) {}
+      await db.insert(
+        'messages',
+        message.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
   }
 
   static Future<List<LocalChatMessage>> getMessages() async {
@@ -205,6 +236,11 @@ class LocalDatabaseService {
       orderBy: 'timestamp ASC',
     );
     return maps.map((m) => LocalChatMessage.fromMap(m)).toList();
+  }
+
+  static Future<void> updateMessageStatus(String messageId, String status) async {
+    final db = await database;
+    await db.update('messages', {'status': status}, where: 'id = ?', whereArgs: [messageId]);
   }
 
   static Future<void> updateReaction(String messageId, String? reaction) async {
