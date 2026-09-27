@@ -29,8 +29,12 @@ class GoogleDriveBackupService {
   static final GoogleDriveBackupService instance = GoogleDriveBackupService._internal();
   GoogleDriveBackupService._internal();
 
+  static const String _serverClientId =
+      '1013170499317-4u6k7vten19pqe8s1lit0amm0m15dan4.apps.googleusercontent.com';
+
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [drive.DriveApi.driveFileScope],
+    serverClientId: _serverClientId,
   );
 
   final _uuid = const Uuid();
