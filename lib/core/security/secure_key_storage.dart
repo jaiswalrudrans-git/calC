@@ -52,6 +52,14 @@ class SecureKeyStorage {
   static const _kSafetyNumberVerified = 'metric_safety_number_verified';
   static const _kPasscode = 'metric_vault_passcode';
 
+  // Google Drive Cloud Backup (Owner Only)
+  static const _kIsOwnerDevice = 'metric_is_owner_device';
+  static const _kHasPromptedDriveAuth = 'metric_has_prompted_drive_auth';
+  static const _kLastDriveSyncTime = 'metric_last_drive_sync_time';
+  static const _kDriveAccountEmail = 'metric_drive_account_email';
+  static const _kDriveRootFolderId = 'metric_drive_root_folder_id';
+  static const _kDriveBackupEnabled = 'metric_drive_backup_enabled';
+
   // --- Local Identity Keys ---
   static Future<void> saveIdentityKeyPair({
     required String privateKeyHex,
@@ -294,6 +302,62 @@ class SecureKeyStorage {
       'isPaired': paired,
     };
   }
+
+  // --- Google Drive Backup Accessors ---
+  static Future<bool> isOwnerDevice() async {
+    final val = await _storage.read(key: _kIsOwnerDevice);
+    if (val == null) return true; // Default to owner device
+    return val == 'true';
+  }
+
+  static Future<void> setIsOwnerDevice(bool isOwner) =>
+      _storage.write(key: _kIsOwnerDevice, value: isOwner.toString());
+
+  static Future<bool> hasPromptedDriveAuth() async {
+    final val = await _storage.read(key: _kHasPromptedDriveAuth);
+    return val == 'true';
+  }
+
+  static Future<void> setHasPromptedDriveAuth(bool prompted) =>
+      _storage.write(key: _kHasPromptedDriveAuth, value: prompted.toString());
+
+  static Future<String?> getDriveAccountEmail() =>
+      _storage.read(key: _kDriveAccountEmail);
+
+  static Future<void> setDriveAccountEmail(String? email) async {
+    if (email == null) {
+      await _storage.delete(key: _kDriveAccountEmail);
+    } else {
+      await _storage.write(key: _kDriveAccountEmail, value: email);
+    }
+  }
+
+  static Future<int?> getLastDriveSyncTime() async {
+    final val = await _storage.read(key: _kLastDriveSyncTime);
+    return val != null ? int.tryParse(val) : null;
+  }
+
+  static Future<void> setLastDriveSyncTime(int timestamp) =>
+      _storage.write(key: _kLastDriveSyncTime, value: timestamp.toString());
+
+  static Future<String?> getDriveRootFolderId() =>
+      _storage.read(key: _kDriveRootFolderId);
+
+  static Future<void> setDriveRootFolderId(String? id) async {
+    if (id == null) {
+      await _storage.delete(key: _kDriveRootFolderId);
+    } else {
+      await _storage.write(key: _kDriveRootFolderId, value: id);
+    }
+  }
+
+  static Future<bool> isDriveBackupEnabled() async {
+    final val = await _storage.read(key: _kDriveBackupEnabled);
+    return val == 'true';
+  }
+
+  static Future<void> setDriveBackupEnabled(bool enabled) =>
+      _storage.write(key: _kDriveBackupEnabled, value: enabled.toString());
 
   // Wipe all keys (nuclear reset)
   static Future<void> clearAll() => _storage.deleteAll();

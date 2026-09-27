@@ -11,6 +11,7 @@ import 'core/security/signal_crypto.dart';
 import 'core/security/privacy_guard.dart';
 import 'core/security/secure_key_storage.dart';
 import 'core/security/auth_service.dart';
+import 'core/backup/google_drive_backup_service.dart';
 import 'features/converter/screens/converter_home_screen.dart';
 
 void main() async {
@@ -59,6 +60,7 @@ Future<void> _initializeBackgroundServices() async {
     await SignalCryptoService.ensurePrekeyBundle();
     await AuthService.getOrCreateDeviceUid();
     await PrivacyGuard.setScreenProtection(true);
+    await GoogleDriveBackupService.instance.init();
   } catch (e) {
     debugPrint('[Metric Services Init] $e');
   }

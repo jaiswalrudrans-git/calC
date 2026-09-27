@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
 import '../../../core/database/local_cache.dart';
+import '../../../core/backup/google_drive_backup_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../pairing/screens/pairing_screen.dart';
 import 'secret_knock_screen.dart';
@@ -23,11 +25,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _safetyNumber;
   bool _isSafetyVerified = false;
   bool _driveBackupEnabled = false;
+  bool _isOwnerDevice = true;
+  String? _driveEmail;
+  int? _lastSyncTime;
+  bool _isSyncing = false;
+  String? _syncStatus;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    GoogleDriveBackupService.instance.isSyncingNotifier.addListener(_onSyncUpdate);
+    GoogleDriveBackupService.instance.syncStatusNotifier.addListener(_onSyncStatusUpdate);
+  }
+
+  @override
+  void dispose() {
+    GoogleDriveBackupService.instance.isSyncingNotifier.removeListener(_onSyncUpdate);
+    GoogleDriveBackupService.instance.syncStatusNotifier.removeListener(_onSyncStatusUpdate);
+    super.dispose();
+  }
+
+  void _onSyncUpdate() {
+    if (mounted) {
+      setState(() {
+        _isSyncing = GoogleDriveBackupService.instance.isSyncingNotifier.value;
+      });
+    }
+  }
+
+  void _onSyncStatusUpdate() {
+    if (mounted) {
+      setState(() {
+        _syncStatus = GoogleDriveBackupService.instance.syncStatusNotifier.value;
+      });
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -38,6 +70,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final peer = await SecureKeyStorage.getPairedUid();
     final safety = await SignalCryptoService.getSafetyNumber();
     final verified = await SecureKeyStorage.isSafetyNumberVerified();
+    final isOwner = await SecureKeyStorage.isOwnerDevice();
+    final driveEmail = await SecureKeyStorage.getDriveAccountEmail();
+    final driveEnabled = await SecureKeyStorage.isDriveBackupEnabled();
+    final lastSync = await SecureKeyStorage.getLastDriveSyncTime();
 
     if (mounted) {
       setState(() {
@@ -48,6 +84,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _peerUid = peer;
         _safetyNumber = safety;
         _isSafetyVerified = verified;
+        _isOwnerDevice = isOwner;
+        _driveEmail = driveEmail;
+        _driveBackupEnabled = driveEnabled;
+        _lastSyncTime = lastSync;
       });
     }
   }
@@ -486,29 +526,135 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 24),
 
             // Cloud Sync & Storage
-            _buildSectionHeader('CLOUD BACKUP & STORAGE', isDark),
+            _buildSectionHeader('CLOUD BACKUP & STORAGE (GOOGLE DRIVE)', isDark),
             _buildCard(
               isDark,
               children: [
-                SwitchListTile(
-                  secondary: const Icon(Icons.cloud_sync_rounded, color: AppColors.cyanIcon),
-                  title: const Text('Google Drive Backup', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: const Text('Encrypted DB only, off by default (Zero Cost)'),
-                  value: _driveBackupEnabled,
-                  activeThumbColor: AppColors.primary,
-                  onChanged: (val) {
-                    setState(() => _driveBackupEnabled = val);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          val
-                              ? 'Google Drive encrypted sync enabled (uses your free personal quota)'
-                              : 'Cloud backup disabled',
+                if (!_isOwnerDevice) ...[
+                  const ListTile(
+                    leading: Icon(Icons.shield_outlined, color: AppColors.textMutedDark),
+                    title: Text('Peer Device Mode', style: TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text('Cloud backups are managed exclusively by the owner device.'),
+                  ),
+                ] else ...[
+                  SwitchListTile(
+                    secondary: const Icon(Icons.cloud_sync_rounded, color: AppColors.cyanIcon),
+                    title: const Text('Encrypted Google Drive Backup', style: TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: const Text('Zero-knowledge ciphertext sync to owner\'s Drive'),
+                    value: _driveBackupEnabled,
+                    activeThumbColor: AppColors.primary,
+                    onChanged: (val) async {
+                      await SecureKeyStorage.setDriveBackupEnabled(val);
+                      setState(() => _driveBackupEnabled = val);
+                      if (val && _driveEmail == null) {
+                        final ok = await GoogleDriveBackupService.instance.signIn();
+                        if (ok) _loadSettings();
+                      }
+                    },
+                  ),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  _driveEmail != null ? Icons.account_circle_rounded : Icons.account_circle_outlined,
+                                  size: 18,
+                                  color: _driveEmail != null ? AppColors.secureGreen : AppColors.textMutedDark,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _driveEmail ?? 'Google Account Not Connected',
+                                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                            if (_driveEmail != null)
+                              TextButton(
+                                onPressed: () async {
+                                  await GoogleDriveBackupService.instance.signOut();
+                                  _loadSettings();
+                                },
+                                child: const Text('Disconnect', style: TextStyle(color: AppColors.alertRed, fontSize: 12)),
+                              )
+                            else
+                              FilledButton.tonal(
+                                onPressed: () async {
+                                  final ok = await GoogleDriveBackupService.instance.signIn();
+                                  if (ok) _loadSettings();
+                                },
+                                style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                                child: const Text('Connect', style: TextStyle(fontSize: 12)),
+                              ),
+                          ],
                         ),
-                      ),
-                    );
-                  },
-                ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            if (_isSyncing)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 8),
+                                child: SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+                                ),
+                              ),
+                            Text(
+                              _isSyncing
+                                  ? 'Sync in progress...'
+                                  : 'Status: ${_syncStatus ?? (_lastSyncTime != null ? "Up to date" : "Idle")}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: _isSyncing ? AppColors.primary : AppColors.secureGreen,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _lastSyncTime != null
+                              ? 'Last synced: ${DateFormat('MMM d, yyyy • h:mm a').format(DateTime.fromMillisecondsSinceEpoch(_lastSyncTime!))}'
+                              : 'Never backed up yet',
+                          style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.tonalIcon(
+                                onPressed: _isSyncing
+                                    ? null
+                                    : () async {
+                                        HapticFeedback.lightImpact();
+                                        await GoogleDriveBackupService.instance.syncIncremental();
+                                        _loadSettings();
+                                      },
+                                icon: const Icon(Icons.sync_rounded, size: 16),
+                                label: const Text('Back Up Now'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _showRestoreDialog,
+                                icon: const Icon(Icons.cloud_download_rounded, size: 16),
+                                label: const Text('Restore'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.cleaning_services_rounded, color: AppColors.alertRed),
@@ -520,6 +666,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showRestoreDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restore from Google Drive?'),
+        content: const Text(
+          'This will download your latest encrypted database snapshot and media from Google Drive and decrypt them locally using your on-device keys.\n\nOnly the owner\'s device can perform this restore.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton.icon(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Connecting to Drive and decrypting snapshot...')),
+                );
+                final count = await GoogleDriveBackupService.instance.restoreFromDrive();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Successfully restored $count items from Google Drive!'),
+                      backgroundColor: AppColors.secureGreen,
+                    ),
+                  );
+                  _loadSettings();
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Restore error: $e'), backgroundColor: AppColors.alertRed),
+                  );
+                }
+              }
+            },
+            icon: const Icon(Icons.cloud_download_rounded, size: 18),
+            label: const Text('Restore Now'),
+          ),
+        ],
       ),
     );
   }

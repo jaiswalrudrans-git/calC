@@ -52,6 +52,9 @@ dependencies:
   image: ^4.10.1
   record: ^7.1.1
   audioplayers: ^6.8.1
+  google_sign_in: ^6.2.2
+  googleapis: ^17.0.0
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

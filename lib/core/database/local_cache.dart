@@ -118,6 +118,62 @@ class ConversionRecord {
   }
 }
 
+class DriveLedgerItem {
+  final String id;
+  final String localMsgId;
+  final String? localFilePath;
+  final String? mediaType;
+  final String folderKey; // e.g. "2026-09" or "db"
+  final String obscuredFilename;
+  final String? driveFileId;
+  final String status; // 'pending', 'synced', 'failed'
+  final int timestamp;
+  final int? syncedAt;
+  final String? error;
+
+  DriveLedgerItem({
+    required this.id,
+    required this.localMsgId,
+    this.localFilePath,
+    this.mediaType,
+    required this.folderKey,
+    required this.obscuredFilename,
+    this.driveFileId,
+    this.status = 'pending',
+    required this.timestamp,
+    this.syncedAt,
+    this.error,
+  });
+
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'local_msg_id': localMsgId,
+    'local_file_path': localFilePath,
+    'media_type': mediaType,
+    'folder_key': folderKey,
+    'obscured_filename': obscuredFilename,
+    'drive_file_id': driveFileId,
+    'status': status,
+    'timestamp': timestamp,
+    'synced_at': syncedAt,
+    'error': error,
+  };
+
+  factory DriveLedgerItem.fromMap(Map<String, dynamic> map) => DriveLedgerItem(
+    id: map['id'] as String,
+    localMsgId: map['local_msg_id'] as String,
+    localFilePath: map['local_file_path'] as String?,
+    mediaType: map['media_type'] as String?,
+    folderKey: map['folder_key'] as String,
+    obscuredFilename: map['obscured_filename'] as String,
+    driveFileId: map['drive_file_id'] as String?,
+    status: map['status'] as String? ?? 'pending',
+    timestamp: (map['timestamp'] as num).toInt(),
+    syncedAt: (map['synced_at'] as num?)?.toInt(),
+    error: map['error'] as String?,
+  );
+}
+
 class LocalDatabaseService {
   static Database? _db;
 
@@ -138,7 +194,7 @@ class LocalDatabaseService {
 
       return await openDatabase(
         path,
-        version: 2,
+        version: 3,
         onCreate: (db, version) async {
           await db.execute('''
             CREATE TABLE messages (
@@ -170,18 +226,68 @@ class LocalDatabaseService {
               isFavorite INTEGER
             )
           ''');
+
+          await db.execute('''
+            CREATE TABLE drive_backup_ledger (
+              id TEXT PRIMARY KEY,
+              local_msg_id TEXT,
+              local_file_path TEXT,
+              media_type TEXT,
+              folder_key TEXT,
+              obscured_filename TEXT,
+              drive_file_id TEXT,
+              status TEXT DEFAULT 'pending',
+              timestamp INTEGER,
+              synced_at INTEGER,
+              error TEXT
+            )
+          ''');
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           try { await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"'); } catch (_) {}
           try { await db.execute('ALTER TABLE messages ADD COLUMN localPath TEXT'); } catch (_) {}
           try { await db.execute('ALTER TABLE messages ADD COLUMN mediaSize INTEGER'); } catch (_) {}
           try { await db.execute('ALTER TABLE messages ADD COLUMN duration INTEGER'); } catch (_) {}
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS drive_backup_ledger (
+                id TEXT PRIMARY KEY,
+                local_msg_id TEXT,
+                local_file_path TEXT,
+                media_type TEXT,
+                folder_key TEXT,
+                obscured_filename TEXT,
+                drive_file_id TEXT,
+                status TEXT DEFAULT 'pending',
+                timestamp INTEGER,
+                synced_at INTEGER,
+                error TEXT
+              )
+            ''');
+          } catch (_) {}
         },
         onOpen: (db) async {
           try { await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"'); } catch (_) {}
           try { await db.execute('ALTER TABLE messages ADD COLUMN localPath TEXT'); } catch (_) {}
           try { await db.execute('ALTER TABLE messages ADD COLUMN mediaSize INTEGER'); } catch (_) {}
           try { await db.execute('ALTER TABLE messages ADD COLUMN duration INTEGER'); } catch (_) {}
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS drive_backup_ledger (
+                id TEXT PRIMARY KEY,
+                local_msg_id TEXT,
+                local_file_path TEXT,
+                media_type TEXT,
+                folder_key TEXT,
+                obscured_filename TEXT,
+                drive_file_id TEXT,
+                status TEXT DEFAULT 'pending',
+                timestamp INTEGER,
+                synced_at INTEGER,
+                error TEXT
+              )
+            ''');
+          } catch (_) {}
         },
       );
     } catch (_) {
@@ -219,6 +325,21 @@ class LocalDatabaseService {
           toValue REAL,
           timestamp INTEGER,
           isFavorite INTEGER
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS drive_backup_ledger (
+          id TEXT PRIMARY KEY,
+          local_msg_id TEXT,
+          local_file_path TEXT,
+          media_type TEXT,
+          folder_key TEXT,
+          obscured_filename TEXT,
+          drive_file_id TEXT,
+          status TEXT DEFAULT 'pending',
+          timestamp INTEGER,
+          synced_at INTEGER,
+          error TEXT
         )
       ''');
       return db;
@@ -332,5 +453,67 @@ class LocalDatabaseService {
   static Future<void> clearConversions() async {
     final db = await database;
     await db.delete('conversions');
+  }
+
+  // --- Google Drive Backup Ledger Operations ---
+  static Future<void> queueDriveBackup(DriveLedgerItem item) async {
+    final db = await database;
+    await db.insert('drive_backup_ledger', item.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  static Future<List<DriveLedgerItem>> getPendingDriveBackups() async {
+    final db = await database;
+    final rows = await db.query(
+      'drive_backup_ledger',
+      where: "status != 'synced'",
+      orderBy: 'timestamp ASC',
+    );
+    return rows.map((r) => DriveLedgerItem.fromMap(r)).toList();
+  }
+
+  static Future<void> markDriveBackupSynced(String id, String driveFileId) async {
+    final db = await database;
+    await db.update(
+      'drive_backup_ledger',
+      {
+        'drive_file_id': driveFileId,
+        'status': 'synced',
+        'synced_at': DateTime.now().millisecondsSinceEpoch,
+        'error': null,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  static Future<void> markDriveBackupFailed(String id, String error) async {
+    final db = await database;
+    await db.update(
+      'drive_backup_ledger',
+      {
+        'status': 'failed',
+        'error': error,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  static Future<List<DriveLedgerItem>> getAllDriveLedger() async {
+    final db = await database;
+    final rows = await db.query('drive_backup_ledger', orderBy: 'timestamp DESC');
+    return rows.map((r) => DriveLedgerItem.fromMap(r)).toList();
+  }
+
+  static Future<String?> getLocalDatabaseFilePath() async {
+    try {
+      final dbPath = await getDatabasesPath();
+      final path = p.join(dbPath, 'metric_local_vault.db');
+      final file = File(path);
+      if (await file.exists()) {
+        return path;
+      }
+    } catch (_) {}
+    return null;
   }
 }

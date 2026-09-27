@@ -12,6 +12,9 @@ import 'package:record/record.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/security/privacy_guard.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/backup/google_drive_backup_service.dart';
+import '../../gallery/screens/fullscreen_media_gallery_viewer.dart';
+import '../../gallery/screens/shared_gallery_screen.dart';
 import '../../pairing/screens/pairing_screen.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../providers/chat_provider.dart';
@@ -34,6 +37,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   bool _isSearching = false;
   String _searchQuery = '';
+  String? _highlightedMessageId;
+  Timer? _highlightTimer;
   bool _hasInputText = false;
   bool _isRecordingVoice = false;
   String? _recordFilePath;
@@ -75,6 +80,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _scrollController.dispose();
     _inputFocusNode.dispose();
     _recordDurationTimer?.cancel();
+    _highlightTimer?.cancel();
     _audioRecorder.dispose();
     PrivacyGuard.setScreenProtection(false);
     super.dispose();
@@ -92,6 +98,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } else {
       _scrollController.jumpTo(maxScroll);
     }
+  }
+
+  void _scrollToAndHighlightMessage(String messageId) {
+    final messages = ref.read(chatProvider).messages;
+    final index = messages.indexWhere((m) => m.id == messageId);
+    if (index == -1) return;
+
+    setState(() {
+      _highlightedMessageId = messageId;
+    });
+
+    HapticFeedback.mediumImpact();
+
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (mounted) {
+        setState(() => _highlightedMessageId = null);
+      }
+    });
+
+    if (_scrollController.hasClients) {
+      final maxScroll = _scrollController.position.maxScrollExtent;
+      final targetScroll = (index / (messages.isEmpty ? 1 : messages.length)) * maxScroll;
+      _scrollController.animateTo(
+        targetScroll.clamp(0.0, maxScroll),
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  void _maybePromptDriveBackup() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        GoogleDriveBackupService.instance.checkAndPromptFirstMediaAuth(context);
+      }
+    });
   }
 
   void _sendMessage() {
@@ -194,6 +237,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               fileName: fileName,
               duration: duration,
             );
+            _maybePromptDriveBackup();
             Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
           }
         }
@@ -246,6 +290,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         mediaType: 'image',
         fileName: fileName,
       );
+      _maybePromptDriveBackup();
       Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
     } catch (e) {
       if (mounted) {
@@ -275,6 +320,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         mediaType: 'image',
         fileName: fileName,
       );
+      _maybePromptDriveBackup();
       Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
     } catch (e) {
       if (mounted) {
@@ -283,6 +329,61 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         );
       }
     }
+  }
+
+  Future<void> _pickAndSendVideo(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickVideo(source: source);
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      await ref.read(chatProvider.notifier).sendMediaMessage(
+        rawBytes: bytes,
+        mediaType: 'video',
+        fileName: p.basename(picked.path),
+      );
+      _maybePromptDriveBackup();
+      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send video: $e')),
+        );
+      }
+    }
+  }
+
+  void _showMediaPickerOptions({required bool isCamera}) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: Icon(isCamera ? Icons.camera_alt_rounded : Icons.photo_library_rounded),
+              title: Text(isCamera ? 'Take Photo' : 'Photo Gallery'),
+              onTap: () {
+                Navigator.pop(ctx);
+                if (isCamera) {
+                  _pickAndSendCamera();
+                } else {
+                  _pickAndSendGallery();
+                }
+              },
+            ),
+            ListTile(
+              leading: Icon(isCamera ? Icons.videocam_rounded : Icons.video_library_rounded),
+              title: Text(isCamera ? 'Record Video' : 'Video Gallery'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickAndSendVideo(isCamera ? ImageSource.camera : ImageSource.gallery);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _pickAndSendDocument() async {
@@ -298,6 +399,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         mediaType: 'document',
         fileName: picked.name,
       );
+      _maybePromptDriveBackup();
       Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
     } catch (e) {
       if (mounted) {
@@ -321,6 +423,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         mediaType: 'voice',
         fileName: picked.name,
       );
+      _maybePromptDriveBackup();
       Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
     } catch (e) {
       if (mounted) {
@@ -382,7 +485,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   color: AppColors.roseIcon,
                   onTap: () {
                     Navigator.pop(ctx);
-                    _pickAndSendCamera();
+                    _showMediaPickerOptions(isCamera: true);
                   },
                 ),
                 _buildAttachmentOption(
@@ -391,7 +494,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   color: AppColors.blueIcon,
                   onTap: () {
                     Navigator.pop(ctx);
-                    _pickAndSendGallery();
+                    _showMediaPickerOptions(isCamera: false);
                   },
                 ),
                 _buildAttachmentOption(
@@ -455,7 +558,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _showClearChatDialog();
         break;
       case 'view_media':
-        _showMediaViewerSheet();
+        final targetMessageId = await Navigator.push<String>(
+          context,
+          MaterialPageRoute(builder: (context) => const SharedGalleryScreen()),
+        );
+        if (targetMessageId != null && mounted) {
+          _scrollToAndHighlightMessage(targetMessageId);
+        }
         break;
       case 'export_chat':
         _showExportChatDialog();
@@ -524,195 +633,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             label: const Text('Copy Transcript'),
           ),
         ],
-      ),
-    );
-  }
-
-  void _showMediaViewerSheet() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final allMedia = ref.read(chatProvider).messages
-        .where((m) => m.mediaType != null)
-        .toList()
-        .reversed
-        .toList();
-
-    final imageList = allMedia.where((m) => m.mediaType == 'image').toList();
-    final docList = allMedia.where((m) => m.mediaType == 'document').toList();
-    final voiceList = allMedia.where((m) => m.mediaType == 'voice').toList();
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: isDark ? AppColors.surfaceDark : Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.4,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (context, scrollController) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 38,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Media Vault (${allMedia.length})',
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.pop(ctx),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Divider(),
-              const SizedBox(height: 10),
-              if (allMedia.isEmpty)
-                Expanded(
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.perm_media_outlined,
-                          size: 48,
-                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'No Media Shared Yet',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Photos, voice notes, and documents will appear here.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              else
-                Expanded(
-                  child: ListView(
-                    controller: scrollController,
-                    children: [
-                      if (imageList.isNotEmpty) ...[
-                        Text(
-                          'PHOTOS (${imageList.length})',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        GridView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8,
-                          ),
-                          itemCount: imageList.length,
-                          itemBuilder: (context, i) {
-                            final m = imageList[i];
-                            final hasFile = m.localPath != null && File(m.localPath!).existsSync();
-                            return GestureDetector(
-                              onTap: hasFile
-                                  ? () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => ImageViewerScreen(
-                                            filePath: m.localPath!,
-                                            title: m.text,
-                                            timestamp: m.timestamp,
-                                            heroTag: 'gallery_img_${m.id}',
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  : null,
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: hasFile
-                                    ? Image.file(File(m.localPath!), fit: BoxFit.cover)
-                                    : Container(
-                                        color: Colors.grey.shade300,
-                                        child: const Icon(Icons.image_not_supported_rounded),
-                                      ),
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 20),
-                      ],
-                      if (voiceList.isNotEmpty) ...[
-                        Text(
-                          'VOICE NOTES (${voiceList.length})',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        ...voiceList.map((m) => Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: VoiceBubbleWidget(message: m, isDark: isDark),
-                            )),
-                        const SizedBox(height: 20),
-                      ],
-                      if (docList.isNotEmpty) ...[
-                        Text(
-                          'DOCUMENTS (${docList.length})',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        ...docList.map((m) => Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: _buildDocumentContent(m, isDark),
-                            )),
-                      ],
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -1365,6 +1285,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Widget _buildMessageBubble(LocalChatMessage msg, bool isDark) {
     final timeStr = DateFormat('hh:mm a').format(DateTime.fromMillisecondsSinceEpoch(msg.timestamp));
+    final isHighlighted = msg.id == _highlightedMessageId;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -1372,7 +1293,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         mainAxisAlignment: msg.isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Container(
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
             padding: msg.mediaType == 'image'
                 ? const EdgeInsets.all(4)
@@ -1387,12 +1309,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 bottomLeft: Radius.circular(msg.isMe ? 16 : 2),
                 bottomRight: Radius.circular(msg.isMe ? 2 : 16),
               ),
+              border: isHighlighted
+                  ? Border.all(color: AppColors.primary, width: 2.5)
+                  : null,
               boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.06),
-                  blurRadius: 3,
-                  offset: const Offset(0, 1),
-                ),
+                if (isHighlighted)
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.5),
+                    blurRadius: 12,
+                    spreadRadius: 2,
+                  )
+                else
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 3,
+                    offset: const Offset(0, 1),
+                  ),
               ],
             ),
             child: Column(
@@ -1469,6 +1401,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget _buildBubbleContent(LocalChatMessage msg, bool isDark) {
     if (msg.mediaType == 'image') {
       return _buildImageContent(msg, isDark);
+    } else if (msg.mediaType == 'video') {
+      return _buildVideoContent(msg, isDark);
     } else if (msg.mediaType == 'voice') {
       return VoiceBubbleWidget(message: msg, isDark: isDark);
     } else if (msg.mediaType == 'document') {
@@ -1485,6 +1419,95 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
       );
     }
+  }
+
+  Widget _buildVideoContent(LocalChatMessage msg, bool isDark) {
+    final hasFile = msg.localPath != null && File(msg.localPath!).existsSync();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: hasFile
+              ? () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => FullScreenMediaGalleryViewer(
+                        items: [msg],
+                        initialIndex: 0,
+                      ),
+                    ),
+                  );
+                }
+              : null,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: double.infinity,
+              height: 180,
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E2235) : const Color(0xFF262C40),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.3),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white70, width: 2),
+                      ),
+                      child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 36),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 8,
+                    left: 8,
+                    right: 8,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Icon(Icons.videocam_rounded, color: Colors.white70, size: 16),
+                        if (msg.duration != null && msg.duration! > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '${msg.duration! ~/ 60}:${(msg.duration! % 60).toString().padLeft(2, '0')}',
+                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (msg.text.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(6, 6, 6, 2),
+            child: Text(
+              msg.text,
+              style: TextStyle(
+                fontSize: 14,
+                color: msg.isMe
+                    ? (isDark ? Colors.white : const Color(0xFF111B21))
+                    : (isDark ? Colors.white : const Color(0xFF111B21)),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   Widget _buildImageContent(LocalChatMessage msg, bool isDark) {

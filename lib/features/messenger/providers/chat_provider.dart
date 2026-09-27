@@ -10,6 +10,7 @@ import '../../../core/security/auth_service.dart';
 import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
 import '../../../core/security/media_crypto.dart';
+import '../../../core/backup/google_drive_backup_service.dart';
 
 class ChatState {
   final bool isLoading;
@@ -329,6 +330,9 @@ class ChatNotifier extends Notifier<ChatState> {
 
       // Cache decrypted message in local SQLite database
       await LocalDatabaseService.saveMessage(localMsg);
+      if (localMsg.mediaType != null) {
+        unawaited(GoogleDriveBackupService.instance.queueMediaMessage(localMsg));
+      }
       final updated = await LocalDatabaseService.getMessages();
       state = state.copyWith(messages: updated);
 
@@ -420,6 +424,9 @@ class ChatNotifier extends Notifier<ChatState> {
               isMe: false,
             );
             await LocalDatabaseService.saveMessage(localMsg);
+            if (localMsg.mediaType != null) {
+              unawaited(GoogleDriveBackupService.instance.queueMediaMessage(localMsg));
+            }
             hasNew = true;
           } catch (e) {
             if (kDebugMode) debugPrint('[ChatProvider] Parse message error: $e');
@@ -507,6 +514,7 @@ class ChatNotifier extends Notifier<ChatState> {
       duration: duration,
     );
     await LocalDatabaseService.saveMessage(pendingMsg);
+    unawaited(GoogleDriveBackupService.instance.queueMediaMessage(pendingMsg));
     var updated = await LocalDatabaseService.getMessages();
     state = state.copyWith(messages: updated, errorMessage: null);
 
