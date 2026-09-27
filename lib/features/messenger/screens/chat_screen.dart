@@ -15,7 +15,6 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/backup/google_drive_backup_service.dart';
 import '../../gallery/screens/fullscreen_media_gallery_viewer.dart';
 import '../../gallery/screens/shared_gallery_screen.dart';
-import '../../pairing/screens/pairing_screen.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/voice_bubble_widget.dart';
@@ -924,10 +923,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         onPressed: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (context) => const PairingScreen()),
+                            MaterialPageRoute(builder: (context) => const SettingsScreen()),
                           );
                         },
-                        child: const Text('Pair Now', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        child: const Text('View Connect Code', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                       ),
                     ],
                   ),

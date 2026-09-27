@@ -9,8 +9,8 @@ import 'unit_detail_screen.dart';
 import 'conversion_history_screen.dart';
 import 'favorites_screen.dart';
 import 'converter_settings_screen.dart';
-import '../../messenger/screens/chat_screen.dart';
-import '../../pairing/screens/pairing_screen.dart';
+import '../../auth/auth.dart';
+import '../../messenger/screens/chat_list_home_screen.dart';
 import '../../../core/security/secure_key_storage.dart';
 
 class ConverterHomeScreen extends ConsumerStatefulWidget {
@@ -81,18 +81,28 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
     _knockResetTimer?.cancel();
     _knockSequence.clear();
 
-    final isPaired = await SecureKeyStorage.isPaired();
+    final isLoggedIn = await AccountAuthService.isLoggedIn();
     if (!mounted) return;
 
-    if (isPaired) {
+    if (!isLoggedIn) {
       await Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const ChatScreen()),
+        MaterialPageRoute(
+          builder: (context) => WelcomeAuthScreen(
+            onAuthSuccess: () {
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const ChatListHomeScreen()),
+                (route) => route.isFirst,
+              );
+            },
+          ),
+        ),
       );
     } else {
       await Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const PairingScreen()),
+        MaterialPageRoute(builder: (context) => const ChatListHomeScreen()),
       );
     }
 
@@ -181,13 +191,16 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Unit Converter',
-                      style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.6,
-                        color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    GestureDetector(
+                      onLongPress: _openSecretVault,
+                      child: Text(
+                        'Unit Converter',
+                        style: TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.6,
+                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -298,6 +311,7 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
   Widget _buildHeroCard(bool isDark) {
     return Container(
       height: 168,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         gradient: LinearGradient(
@@ -313,17 +327,16 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: (isDark ? Colors.black : const Color(0xFF2563EB)).withOpacity(0.08),
+            color: (isDark ? Colors.black : const Color(0xFF2563EB)).withValues(alpha: 0.08),
             blurRadius: 20,
             offset: const Offset(0, 8),
           ),
         ],
       ),
-      child: Stack(
+      child: Row(
         children: [
           // Left text content
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 22, 120, 20),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
@@ -350,61 +363,60 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
               ],
             ),
           ),
+          const SizedBox(width: 8),
 
           // Right 3D Calculator illustration & Floating Pills
-          Positioned(
-            right: 14,
-            top: 14,
-            bottom: 14,
-            width: 130,
+          SizedBox(
+            width: 104,
+            height: 124,
             child: Stack(
               alignment: Alignment.center,
               children: [
                 // 3D Calculator card
                 Container(
-                  width: 78,
-                  height: 104,
+                  width: 72,
+                  height: 98,
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
                       colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
-                    borderRadius: BorderRadius.circular(18),
+                    borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFF2563EB).withOpacity(0.35),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
+                        color: const Color(0xFF2563EB).withValues(alpha: 0.35),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
                       ),
                     ],
                   ),
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(7),
                   child: Column(
                     children: [
                       // Screen
                       Container(
-                        height: 22,
+                        height: 20,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.25),
-                          borderRadius: BorderRadius.circular(6),
+                          color: Colors.white.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(5),
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       // Buttons Grid
                       Expanded(
                         child: GridView.count(
                           crossAxisCount: 3,
-                          mainAxisSpacing: 4,
-                          crossAxisSpacing: 4,
+                          mainAxisSpacing: 3,
+                          crossAxisSpacing: 3,
                           physics: const NeverScrollableScrollPhysics(),
                           children: List.generate(9, (i) {
                             return Container(
                               decoration: BoxDecoration(
                                 color: i == 7
                                     ? Colors.amber[400]
-                                    : Colors.white.withOpacity(0.85),
-                                borderRadius: BorderRadius.circular(4),
+                                    : Colors.white.withValues(alpha: 0.85),
+                                borderRadius: BorderRadius.circular(3),
                               ),
                             );
                           }),
@@ -416,22 +428,22 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
 
                 // Floating Tag: kg
                 Positioned(
-                  top: 4,
-                  left: 2,
+                  top: 2,
+                  left: 0,
                   child: _buildFloatingTag('kg', isDark),
                 ),
 
                 // Floating Tag: m
                 Positioned(
-                  top: 6,
-                  right: 4,
+                  top: 4,
+                  right: 0,
                   child: _buildFloatingTag('m', isDark),
                 ),
 
                 // Floating Tag: °C
                 Positioned(
-                  bottom: 6,
-                  right: 4,
+                  bottom: 2,
+                  right: 0,
                   child: _buildFloatingTag('°C', isDark),
                 ),
               ],
@@ -446,11 +458,11 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: (isDark ? const Color(0xFF253352) : Colors.white).withOpacity(0.9),
+        color: (isDark ? const Color(0xFF253352) : Colors.white).withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withValues(alpha: 0.08),
             blurRadius: 6,
             offset: const Offset(0, 2),
           ),

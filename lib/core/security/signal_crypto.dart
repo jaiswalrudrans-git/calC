@@ -294,15 +294,74 @@ class SignalCryptoService {
     return computeSafetyNumber(myPub, peerPub);
   }
 
-  /// Generate a random 6-digit pairing code
-  static String generateRandomPairingCode() {
+  /// Generate a 6-digit numeric connect code (formatted as XXX-XXX)
+  static String generateConnectCode() {
     final rand = Random.secure();
-    return (100000 + rand.nextInt(900000)).toString();
+    final num = 100000 + rand.nextInt(900000);
+    final str = num.toString();
+    return '${str.substring(0, 3)}-${str.substring(3, 6)}';
   }
 
-  /// Backwards-compatible pairing code method
-  static Future<String> getPairingCode() async {
-    return generateRandomPairingCode();
+  /// Connect and establish an encrypted session using the peer's 6-digit Connect Code
+  static Future<void> pairWithConnectCode(String rawCode) async {
+    final cleanPeerCode = rawCode.replaceAll(RegExp(r'[^0-9]'), '');
+    if (cleanPeerCode.length != 6) {
+      throw Exception('Connect code must be exactly 6 digits.');
+    }
+
+    final myConnectCode = await SecureKeyStorage.getMyConnectCode() ?? '';
+    final cleanMyCode = myConnectCode.replaceAll(RegExp(r'[^0-9]'), '');
+
+    if (cleanMyCode.isNotEmpty && cleanMyCode == cleanPeerCode) {
+      throw Exception('You cannot connect to your own device code.');
+    }
+
+    await ensurePrekeyBundle();
+
+    // Standardized UIDs based on connect codes
+    final myUid = cleanMyCode.isNotEmpty ? 'code_$cleanMyCode' : (await SecureKeyStorage.getMyDeviceId() ?? '');
+    final peerUid = 'code_$cleanPeerCode';
+
+    // Deterministic symmetrical shared key derivation using HKDF from sorted connect codes
+    final codes = [cleanMyCode.isNotEmpty ? cleanMyCode : '000000', cleanPeerCode]..sort();
+    final combinedKeyInfo = utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}');
+
+    final derivedRoot = await _hkdf.deriveKey(
+      secretKey: SecretKey(combinedKeyInfo),
+      nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+      info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+    );
+    final rootKey = (await derivedRoot.extractBytes()).sublist(0, 32);
+
+    final derivedChain1 = await _hkdf.deriveKey(
+      secretKey: SecretKey(combinedKeyInfo),
+      nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+      info: utf8.encode('CHAIN_${codes[0]}_TO_${codes[1]}'),
+    );
+    final chain0To1 = (await derivedChain1.extractBytes()).sublist(32, 64);
+
+    final derivedChain2 = await _hkdf.deriveKey(
+      secretKey: SecretKey(combinedKeyInfo),
+      nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+      info: utf8.encode('CHAIN_${codes[1]}_TO_${codes[0]}'),
+    );
+    final chain1To0 = (await derivedChain2.extractBytes()).sublist(32, 64);
+
+    final isFirst = (cleanMyCode.isNotEmpty ? cleanMyCode : '000000') == codes[0];
+    final sendChain = isFirst ? chain0To1 : chain1To0;
+    final recvChain = isFirst ? chain1To0 : chain0To1;
+
+    await SecureKeyStorage.saveRatchetKeys(
+      rootKeyHex: _bytesToHex(rootKey),
+      sendChainKeyHex: _bytesToHex(sendChain),
+      recvChainKeyHex: _bytesToHex(recvChain),
+    );
+
+    // Save paired peer with empty remote public key so Double Ratchet utilizes symmetrical chain keys
+    await SecureKeyStorage.savePairedPeer(
+      peerUid: peerUid,
+      peerPublicKeyHex: '',
+    );
   }
 
   /// Initialize the Double Ratchet state deterministically between two devices.
@@ -572,7 +631,13 @@ class SignalCryptoService {
         info: utf8.encode('SEND_MSG_KEY'),
       );
       final kdfBytes = await kdfOutput.extractBytes();
+      final nextChainKey = kdfBytes.sublist(0, 32);
       messageKey = SecretKey(kdfBytes.sublist(32, 64));
+      await SecureKeyStorage.saveRatchetKeys(
+        rootKeyHex: await SecureKeyStorage.getRootKey() ?? '',
+        sendChainKeyHex: _bytesToHex(nextChainKey),
+        recvChainKeyHex: await SecureKeyStorage.getRecvChainKey() ?? '',
+      );
     }
 
     final plaintextBytes = utf8.encode(plaintext);

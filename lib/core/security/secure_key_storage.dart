@@ -44,6 +44,7 @@ class SecureKeyStorage {
   static const _kRemoteOneTimePrekeyId = 'metric_remote_onetime_prekey_id';
 
   static const _kMyDeviceId = 'metric_my_device_uid';
+  static const _kMyConnectCode = 'metric_my_connect_code';
   static const _kPairingComplete = 'metric_is_paired';
   static const _kBiometricsEnabled = 'metric_biometrics_enabled';
   static const _kAutoLockSeconds = 'metric_auto_lock_seconds';
@@ -194,11 +195,16 @@ class SecureKeyStorage {
   static Future<String?> getSendChainKey() => _storage.read(key: _kSendChainKey);
   static Future<String?> getRecvChainKey() => _storage.read(key: _kRecvChainKey);
 
-  // --- Device UID ---
+  // --- Device UID & Connect Code ---
   static Future<void> saveMyDeviceId(String uid) =>
       _storage.write(key: _kMyDeviceId, value: uid);
 
   static Future<String?> getMyDeviceId() => _storage.read(key: _kMyDeviceId);
+
+  static Future<void> saveMyConnectCode(String code) =>
+      _storage.write(key: _kMyConnectCode, value: code);
+
+  static Future<String?> getMyConnectCode() => _storage.read(key: _kMyConnectCode);
 
   // --- Security Preferences ---
   static Future<bool> isBiometricsEnabled() async {
@@ -358,6 +364,29 @@ class SecureKeyStorage {
 
   static Future<void> setDriveBackupEnabled(bool enabled) =>
       _storage.write(key: _kDriveBackupEnabled, value: enabled.toString());
+
+  /// Wipe user session credentials, connect code, drive tokens, and pairing state upon logout
+  static Future<void> clearUserSessionOnLogout() async {
+    await _storage.delete(key: _kMyConnectCode);
+    await _storage.delete(key: _kMyDeviceId);
+    await _storage.delete(key: _kPairingComplete);
+    await _storage.delete(key: _kPairedUid);
+    await _storage.delete(key: _kRemoteIdentityPublicKey);
+    await _storage.delete(key: _kRemoteSigningPublicKey);
+    await _storage.delete(key: _kRemoteSignedPrekey);
+    await _storage.delete(key: _kRemoteSignedPrekeyId);
+    await _storage.delete(key: _kRemoteOneTimePrekey);
+    await _storage.delete(key: _kRemoteOneTimePrekeyId);
+    await _storage.delete(key: _kRootKey);
+    await _storage.delete(key: _kSendChainKey);
+    await _storage.delete(key: _kRecvChainKey);
+    await _storage.delete(key: _kDriveAccountEmail);
+    await _storage.delete(key: _kDriveRootFolderId);
+    await _storage.delete(key: _kDriveBackupEnabled);
+    await _storage.delete(key: _kLastDriveSyncTime);
+    await _storage.delete(key: _kHasPromptedDriveAuth);
+    await _storage.delete(key: _kSafetyNumberVerified);
+  }
 
   // Wipe all keys (nuclear reset)
   static Future<void> clearAll() => _storage.deleteAll();

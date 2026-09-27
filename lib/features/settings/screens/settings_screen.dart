@@ -6,8 +6,9 @@ import '../../../core/security/signal_crypto.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/backup/google_drive_backup_service.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../pairing/screens/pairing_screen.dart';
 import 'secret_knock_screen.dart';
+import '../../auth/auth.dart';
+import '../../../../main.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -30,6 +31,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int? _lastSyncTime;
   bool _isSyncing = false;
   String? _syncStatus;
+  String? _accountUsername;
+  String? _connectCode;
+  bool _isAccountLoggedIn = false;
 
   @override
   void initState() {
@@ -74,6 +78,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final driveEmail = await SecureKeyStorage.getDriveAccountEmail();
     final driveEnabled = await SecureKeyStorage.isDriveBackupEnabled();
     final lastSync = await SecureKeyStorage.getLastDriveSyncTime();
+    final accUser = await AccountAuthService.getCurrentUsername();
+    final accLoggedIn = await AccountAuthService.isLoggedIn();
+    final code = await AccountAuthService.getCurrentConnectCode();
 
     if (mounted) {
       setState(() {
@@ -88,6 +95,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _driveEmail = driveEmail;
         _driveBackupEnabled = driveEnabled;
         _lastSyncTime = lastSync;
+        _accountUsername = accUser;
+        _connectCode = code;
+        _isAccountLoggedIn = accLoggedIn;
       });
     }
   }
@@ -126,6 +136,118 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }).toList(),
       ),
     );
+  }
+
+  void _showAccountInfoDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.account_circle_rounded, color: AppColors.primary, size: 24),
+            ),
+            const SizedBox(width: 12),
+            const Text('Account Details', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildSecurityBullet('Username', '@${_accountUsername ?? "unknown"}'),
+            const SizedBox(height: 6),
+            _buildSecurityBullet('Status', 'Active • Logged In'),
+            const SizedBox(height: 6),
+            _buildSecurityBullet('Encryption', 'Zero-Knowledge E2E'),
+            if (_connectCode != null) ...[
+              const SizedBox(height: 6),
+              _buildSecurityBullet('Connect Code', _connectCode!),
+            ],
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleLogout() async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.logout_rounded, color: AppColors.alertRed),
+            SizedBox(width: 10),
+            Text('Log Out Account'),
+          ],
+        ),
+        content: const Text(
+          'Logging out will remove your active session, unique connect code, pairing keys, and Google Drive connection from this device. Are you sure you want to log out?',
+          style: TextStyle(height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.alertRed,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Log Out'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    HapticFeedback.mediumImpact();
+    await AccountAuthService.logout();
+
+    // Immediately pop all routes back to the root decoy ConverterHomeScreen
+    navigatorKey.currentState?.popUntil((route) => route.isFirst);
+
+    final currentCtx = navigatorKey.currentContext;
+    if (currentCtx != null) {
+      ScaffoldMessenger.of(currentCtx).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+              SizedBox(width: 10),
+              Text('Logged out successfully. All credentials removed.'),
+            ],
+          ),
+          backgroundColor: AppColors.primary,
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   void _clearCache() {
@@ -231,24 +353,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         child: const Icon(Icons.verified_user_rounded, color: AppColors.primary, size: 20),
                       ),
                       const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Signal Protocol Engine',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            _isPaired
-                                ? (_isSafetyVerified ? 'Paired & Verified with 1 trusted peer' : 'Paired with 1 peer (Unverified)')
-                                : 'Device not yet paired',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _isPaired ? AppColors.secureGreen : AppColors.warningAmber,
-                              fontWeight: FontWeight.w600,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Signal Protocol Engine',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                             ),
-                          ),
-                        ],
+                            Text(
+                              _isPaired
+                                  ? (_isSafetyVerified ? 'Paired & Verified with 1 trusted peer' : 'Paired with 1 peer (Unverified)')
+                                  : 'Device not yet paired',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _isPaired ? AppColors.secureGreen : AppColors.warningAmber,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -265,23 +389,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             const SizedBox(height: 24),
 
-            // Pairing & Verification Section
-            _buildSectionHeader('PAIRING & IDENTITY VERIFICATION', isDark),
+            // Account & Connect Info Section
+            _buildSectionHeader('PROFILE & CONNECT CODE', isDark),
             _buildCard(
               isDark,
               children: [
-                // Pair / Re-pair Tile
-                ListTile(
-                  leading: const Icon(Icons.phonelink_ring_rounded, color: AppColors.primary),
-                  title: const Text('Pair with Partner Device', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(_isPaired ? 'Paired • Tap to view code or re-pair' : 'Exchange keys with your partner'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const PairingScreen()),
-                    ).then((_) => _loadSettings());
-                  },
+                // Connect Code Tile
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.tag_rounded, size: 18, color: AppColors.primary),
+                              SizedBox(width: 8),
+                              Text('My Permanent Connect Code', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                            ],
+                          ),
+                          if (_connectCode != null)
+                            IconButton(
+                              icon: const Icon(Icons.copy_rounded, size: 16),
+                              tooltip: 'Copy Connect Code',
+                              constraints: const BoxConstraints(),
+                              padding: EdgeInsets.zero,
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: _connectCode!));
+                                HapticFeedback.selectionClick();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Connect Code copied to clipboard'), duration: Duration(seconds: 1)),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      SelectableText(
+                        _connectCode ?? 'Generating...',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 3.0,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Share this permanent 6-digit code with contacts so they can add you.',
+                        style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                      ),
+                    ],
+                  ),
                 ),
                 const Divider(height: 1),
 
@@ -525,6 +687,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             const SizedBox(height: 24),
 
+            // Account & Zero-Knowledge Recovery
+            _buildSectionHeader('ACCOUNT & RECOVERY', isDark),
+            _buildCard(
+              isDark,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.account_circle_outlined, color: AppColors.primary),
+                  title: Text(
+                    _accountUsername != null ? 'Account: @$_accountUsername' : 'No Account Configured',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _isAccountLoggedIn
+                        ? 'Logged in • Active session'
+                        : 'Tap to log in or create account',
+                  ),
+                  trailing: Icon(
+                    _isAccountLoggedIn ? Icons.info_outline_rounded : Icons.chevron_right_rounded,
+                  ),
+                  onTap: () {
+                    if (_isAccountLoggedIn) {
+                      // Already logged in: show username & details, do NOT re-open login portal
+                      _showAccountInfoDialog();
+                    } else {
+                      // Logged out: open login or create account options
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => WelcomeAuthScreen(
+                            onAuthSuccess: () {
+                              Navigator.pop(context);
+                              _loadSettings();
+                            },
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.key_rounded, color: AppColors.warningAmber),
+                  title: const Text('Reset Password with Recovery Code', style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Zero-knowledge account recovery flow'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => ForgotPasswordScreen(
+                          initialUsername: _accountUsername,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                if (_isAccountLoggedIn) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.logout_rounded, color: AppColors.alertRed),
+                    title: const Text('Log Out Account', style: TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.w600)),
+                    subtitle: const Text('Sign out, clear connect code & Drive backup'),
+                    onTap: _handleLogout,
+                  ),
+                ],
+              ],
+            ),
+
+            const SizedBox(height: 24),
+
             // Cloud Sync & Storage
             _buildSectionHeader('CLOUD BACKUP & STORAGE (GOOGLE DRIVE)', isDark),
             _buildCard(
@@ -547,8 +779,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       await SecureKeyStorage.setDriveBackupEnabled(val);
                       setState(() => _driveBackupEnabled = val);
                       if (val && _driveEmail == null) {
-                        final ok = await GoogleDriveBackupService.instance.signIn();
-                        if (ok) _loadSettings();
+                        final result = await GoogleDriveBackupService.instance.signIn();
+                        if (!mounted) return;
+                        if (result.success) {
+                          _loadSettings();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Connected to Google Drive successfully!')),
+                          );
+                        } else if (result.errorMessage != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(result.errorMessage!),
+                              backgroundColor: AppColors.alertRed,
+                              duration: const Duration(seconds: 4),
+                            ),
+                          );
+                        }
                       }
                     },
                   ),
@@ -586,8 +832,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             else
                               FilledButton.tonal(
                                 onPressed: () async {
-                                  final ok = await GoogleDriveBackupService.instance.signIn();
-                                  if (ok) _loadSettings();
+                                  final result = await GoogleDriveBackupService.instance.signIn();
+                                  if (!mounted) return;
+                                  if (result.success) {
+                                    _loadSettings();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Connected to Google Drive successfully!')),
+                                    );
+                                  } else if (result.errorMessage != null) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(result.errorMessage!),
+                                        backgroundColor: AppColors.alertRed,
+                                        duration: const Duration(seconds: 5),
+                                      ),
+                                    );
+                                  }
                                 },
                                 style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
                                 child: const Text('Connect', style: TextStyle(fontSize: 12)),
@@ -729,16 +989,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildCard(bool isDark, {required List<Widget> children}) {
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-          width: 1.2,
+    return Material(
+      color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+            width: 1.2,
+          ),
         ),
+        child: Column(children: children),
       ),
-      child: Column(children: children),
     );
   }
 
@@ -749,7 +1013,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
-          Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            ),
+          ),
         ],
       ),
     );

@@ -1,55 +1,59 @@
 import 'package:flutter/foundation.dart';
-import 'package:uuid/uuid.dart';
 import '../config/supabase_config.dart';
 import 'secure_key_storage.dart';
 
-/// Silent Authentication Service:
-/// - Strictly NO login / password / sign-up screen exists anywhere
-/// - Silently creates or restores a Supabase Anonymous Auth session
-/// - Hardware-persisted device UID in secure storage
+/// Authentication Service for Metric:
+/// - Strictly Account-Based (Username & Password mapped to stable Auth UID)
+/// - NO anonymous authentication
+/// - Stable permanent UID used across Firestore, Signal sessions, and Drive storage
 class AuthService {
-  static const _uuid = Uuid();
-
-  /// Silently get or create this device's unique identifier via Supabase Anonymous Auth
-  static Future<String> getOrCreateDeviceUid() async {
-    // 1. Check local secure storage first
-    var deviceUid = await SecureKeyStorage.getMyDeviceId();
-
-    // 2. Try Supabase Anonymous Auth if Supabase client is available
-    final client = SupabaseConfig.client;
-    if (client != null) {
-      try {
-        final currentUser = client.auth.currentUser;
-        if (currentUser != null && currentUser.id.isNotEmpty) {
-          deviceUid = currentUser.id;
-          await SecureKeyStorage.saveMyDeviceId(deviceUid);
-          return deviceUid;
-        }
-
-        // Silent anonymous sign-in
-        final authResponse = await client.auth.signInAnonymously();
-        if (authResponse.user != null) {
-          deviceUid = authResponse.user!.id;
-          await SecureKeyStorage.saveMyDeviceId(deviceUid);
-          if (kDebugMode) {
-            debugPrint('[AuthService] Supabase Anonymous Auth succeeded. UID: $deviceUid');
-          }
-          return deviceUid;
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[AuthService] Supabase Anonymous Auth notice: $e');
-        }
+  /// Get the current logged-in user's stable UID
+  static Future<String?> getCurrentUid() async {
+    // 1. If user has a connect code, use standard connect UID so peer messages match
+    final connectCode = await SecureKeyStorage.getMyConnectCode();
+    if (connectCode != null && connectCode.isNotEmpty) {
+      final clean = connectCode.replaceAll(RegExp(r'[^0-9]'), '');
+      if (clean.length == 6) {
+        return 'code_$clean';
       }
     }
 
-    if (deviceUid != null && deviceUid.isNotEmpty) {
-      return deviceUid;
+    // 2. Check local secure storage
+    final localUid = await SecureKeyStorage.getMyDeviceId();
+    if (localUid != null && localUid.isNotEmpty) {
+      return localUid;
     }
 
-    // 3. Fallback: Generate cryptographic device UUID & store in secure keystore
-    deviceUid = _uuid.v4();
-    await SecureKeyStorage.saveMyDeviceId(deviceUid);
-    return deviceUid;
+    // 3. Check Supabase client current session if available
+    final client = SupabaseConfig.client;
+    if (client != null) {
+      final currentUser = client.auth.currentUser;
+      if (currentUser != null && currentUser.id.isNotEmpty) {
+        await SecureKeyStorage.saveMyDeviceId(currentUser.id);
+        return currentUser.id;
+      }
+    }
+
+    return null;
+  }
+
+  /// Returns the current stable UID, ensuring non-null fallback for chat initializations
+  static Future<String> getOrCreateDeviceUid() async {
+    final uid = await getCurrentUid();
+    return uid ?? 'unauthenticated_user';
+  }
+
+  /// Sign out current account
+  static Future<void> signOut() async {
+    try {
+      final client = SupabaseConfig.client;
+      if (client != null) {
+        await client.auth.signOut();
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[AuthService] Sign out notice: $e');
+      }
+    }
   }
 }

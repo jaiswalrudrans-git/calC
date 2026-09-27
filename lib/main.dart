@@ -10,9 +10,10 @@ import 'core/theme/app_theme.dart';
 import 'core/security/signal_crypto.dart';
 import 'core/security/privacy_guard.dart';
 import 'core/security/secure_key_storage.dart';
-import 'core/security/auth_service.dart';
 import 'core/backup/google_drive_backup_service.dart';
+import 'features/auth/auth.dart';
 import 'features/converter/screens/converter_home_screen.dart';
+import 'features/messenger/screens/chat_list_home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,7 +34,6 @@ void main() async {
     ),
   );
 
-  // Run the app IMMEDIATELY so the user never sees a blank screen!
   runApp(
     const ProviderScope(
       child: MetricApp(),
@@ -58,13 +58,14 @@ Future<void> _initializeBackgroundServices() async {
 
   try {
     await SignalCryptoService.ensurePrekeyBundle();
-    await AuthService.getOrCreateDeviceUid();
     await PrivacyGuard.setScreenProtection(true);
     await GoogleDriveBackupService.instance.init();
   } catch (e) {
     debugPrint('[Metric Services Init] $e');
   }
 }
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 class MetricApp extends ConsumerStatefulWidget {
   const MetricApp({super.key});
@@ -74,13 +75,10 @@ class MetricApp extends ConsumerStatefulWidget {
 }
 
 class _MetricAppState extends ConsumerState<MetricApp> with WidgetsBindingObserver {
-  bool _isLocked = false;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initialBiometricCheck();
   }
 
   @override
@@ -89,39 +87,12 @@ class _MetricAppState extends ConsumerState<MetricApp> with WidgetsBindingObserv
     super.dispose();
   }
 
-  Future<void> _initialBiometricCheck() async {
-    // Only lock on startup if the device has been paired
-    final isPaired = await SecureKeyStorage.isPaired();
-    if (!isPaired) return;
-
-    final canBio = await PrivacyGuard.canCheckBiometrics();
-    final bioEnabled = await SecureKeyStorage.isBiometricsEnabled();
-    if (canBio && bioEnabled) {
-      if (mounted) setState(() => _isLocked = true);
-      final unlocked = await PrivacyGuard.authenticate();
-      if (mounted) {
-        setState(() => _isLocked = !unlocked);
-      }
-    }
-  }
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      // INSTANT RESET TO DECOY CONVERTER ON HOME / MINIMIZE
+      navigatorKey.currentState?.popUntil((route) => route.isFirst);
       PrivacyGuard.markActive();
-    } else if (state == AppLifecycleState.resumed) {
-      SecureKeyStorage.isPaired().then((isPaired) {
-        if (!isPaired) return;
-        PrivacyGuard.shouldLockOnResume().then((shouldLock) async {
-          if (shouldLock && mounted) {
-            setState(() => _isLocked = true);
-            final unlocked = await PrivacyGuard.authenticate();
-            if (mounted) {
-              setState(() => _isLocked = !unlocked);
-            }
-          }
-        });
-      });
     }
   }
 
@@ -130,61 +101,13 @@ class _MetricAppState extends ConsumerState<MetricApp> with WidgetsBindingObserv
     final themeMode = ref.watch(themeModeProvider);
 
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'Metric',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: themeMode,
-      home: _isLocked ? _buildLockScreen() : const ConverterHomeScreen(),
-    );
-  }
-
-  Widget _buildLockScreen() {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Theme.of(context).primaryColor.withAlpha(30),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.lock_outline_rounded,
-                size: 56,
-                color: Theme.of(context).primaryColor,
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Metric Locked',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Biometric verification required to access unit vault',
-              style: TextStyle(color: Colors.grey, fontSize: 13),
-            ),
-            const SizedBox(height: 32),
-            FilledButton.icon(
-              onPressed: () async {
-                final unlocked = await PrivacyGuard.authenticate();
-                if (mounted && unlocked) {
-                  setState(() => _isLocked = false);
-                }
-              },
-              icon: const Icon(Icons.fingerprint_rounded),
-              label: const Text('Unlock with Biometrics'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              ),
-            ),
-          ],
-        ),
-      ),
+      home: const ConverterHomeScreen(),
     );
   }
 }

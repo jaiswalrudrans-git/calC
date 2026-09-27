@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
@@ -25,16 +26,18 @@ class GoogleAuthClient extends http.BaseClient {
   }
 }
 
+class GoogleSignInResult {
+  final bool success;
+  final String? errorMessage;
+  const GoogleSignInResult({required this.success, this.errorMessage});
+}
+
 class GoogleDriveBackupService {
   static final GoogleDriveBackupService instance = GoogleDriveBackupService._internal();
   GoogleDriveBackupService._internal();
 
-  static const String _serverClientId =
-      '1013170499317-4u6k7vten19pqe8s1lit0amm0m15dan4.apps.googleusercontent.com';
-
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [drive.DriveApi.driveFileScope],
-    serverClientId: _serverClientId,
   );
 
   final _uuid = const Uuid();
@@ -83,26 +86,55 @@ class GoogleDriveBackupService {
   }
 
   /// Interactive sign-in flow (only triggered when owner approves)
-  Future<bool> signIn() async {
+  Future<GoogleSignInResult> signIn() async {
     try {
       final isOwner = await SecureKeyStorage.isOwnerDevice();
-      if (!isOwner) return false;
+      debugPrint('[GoogleDrive] signIn() called. isOwner=$isOwner');
+      if (!isOwner) {
+        return const GoogleSignInResult(
+          success: false,
+          errorMessage: 'This device is not configured as the owner device.',
+        );
+      }
 
+      debugPrint('[GoogleDrive] Calling _googleSignIn.signIn()...');
       final account = await _googleSignIn.signIn();
-      if (account == null) return false;
+      debugPrint('[GoogleDrive] signIn() returned: account=${account?.email ?? "NULL"}');
+
+      if (account == null) {
+        return const GoogleSignInResult(
+          success: false,
+          errorMessage: 'Sign-in cancelled or no account selected.',
+        );
+      }
 
       _currentUser = account;
+      debugPrint('[GoogleDrive] Getting auth headers...');
       final authHeaders = await account.authHeaders;
+      debugPrint('[GoogleDrive] Got ${authHeaders.length} auth headers. Creating DriveApi...');
       _driveApi = drive.DriveApi(GoogleAuthClient(authHeaders));
       await SecureKeyStorage.setDriveAccountEmail(account.email);
       await SecureKeyStorage.setDriveBackupEnabled(true);
+      debugPrint('[GoogleDrive] Sign-in SUCCESSFUL for ${account.email}');
 
       // Trigger initial root folder discovery and sync
       unawaited(syncIncremental());
-      return true;
-    } catch (e) {
-      if (kDebugMode) debugPrint('[GoogleDrive] Sign-in error: $e');
-      return false;
+      return const GoogleSignInResult(success: true);
+    } on PlatformException catch (e, stack) {
+      final msg = '[GoogleDrive] PlatformException: code=${e.code} '
+          'message=${e.message} details=${e.details}';
+      debugPrint(msg);
+      debugPrint('$stack');
+      return GoogleSignInResult(
+        success: false,
+        errorMessage: 'Google Sign-In failed (${e.code}): ${e.message}',
+      );
+    } catch (e, stack) {
+      debugPrint('[GoogleDrive] Sign-in error: $e\n$stack');
+      return GoogleSignInResult(
+        success: false,
+        errorMessage: 'Sign-in error: $e',
+      );
     }
   }
 
@@ -188,7 +220,23 @@ class GoogleDriveBackupService {
                   child: FilledButton.icon(
                     onPressed: () async {
                       Navigator.pop(ctx);
-                      await signIn();
+                      final result = await signIn();
+                      if (context.mounted) {
+                        if (result.success) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Google Drive Backup connected successfully!')),
+                          );
+                        } else if (result.errorMessage != null &&
+                            !result.errorMessage!.contains('cancelled')) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Google Drive: ${result.errorMessage}'),
+                              backgroundColor: AppColors.alertRed,
+                              duration: const Duration(seconds: 4),
+                            ),
+                          );
+                        }
+                      }
                     },
                     icon: const Icon(Icons.cloud_done_rounded, size: 18),
                     label: const Text('Connect Drive'),
@@ -436,8 +484,8 @@ class GoogleDriveBackupService {
   /// Restore chat history and sandboxed media from Google Drive
   Future<int> restoreFromDrive() async {
     if (!isConnected) {
-      final signedIn = await signIn();
-      if (!signedIn) throw Exception('Google account not connected');
+      final result = await signIn();
+      if (!result.success) throw Exception(result.errorMessage ?? 'Google account not connected');
     }
 
     final rootId = await _ensureRootFolder();

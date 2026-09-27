@@ -1,6 +1,6 @@
-# Metric — Firebase Setup Guide (100% Free / Zero Recurring Cost)
+# Metric — Firebase & Account Authentication Setup Guide
 
-"Metric" uses **Firebase Anonymous Authentication** and **Cloud Firestore** on the free **Spark Plan** ($0/month forever). There are no user accounts, passwords, or emails. Everything in Firestore is strictly encrypted ciphertext.
+"Metric" uses **Email/Password Authentication** (mapped under the hood from usernames: `username@metricapp.local`) and **Cloud Firestore**. Accounts possess permanent, stable UIDs. Everything in Firestore is strictly encrypted ciphertext.
 
 ---
 
@@ -12,11 +12,11 @@
 
 ---
 
-### Step 2: Enable Anonymous Authentication
+### Step 2: Enable Email/Password Authentication
 1. In the Firebase console left menu, go to **Build** → **Authentication**.
 2. Click **Get Started**, then click the **Sign-in method** tab.
-3. Select **Anonymous**, toggle **Enable**, and click **Save**.
-   > *No UI is ever shown in the app. The app automatically creates a silent device session.*
+3. Select **Email/Password**, toggle **Enable**, and click **Save**.
+   > *Users enter only a simple Username in the app UI. The app internally maps it to a zero-knowledge account generating a permanent, stable UID.*
 
 ---
 
@@ -24,7 +24,7 @@
 1. Go to **Build** → **Firestore Database**.
 2. Click **Create database**.
 3. Choose a location closest to you (e.g. `nam5 (us-central)` or `asia-south1`).
-4. Choose **Start in production mode** (or test mode, we will apply custom rules next).
+4. Choose **Start in production mode**.
 5. Click **Create**.
 
 ---
@@ -32,7 +32,7 @@
 ### Step 4: Deploy Security Rules
 1. In Firestore Database, click the **Rules** tab.
 2. Paste the contents of `firestore.rules` (included in this project root):
-   - Restricts read/write strictly to the two paired device UIDs.
+   - Restricts read/write strictly to stable authenticated account UIDs.
    - Rejects any document containing plaintext keys (`text`, `caption`, `preview`, `thumbnail`, etc.).
 3. Click **Publish**.
 
@@ -51,5 +51,3 @@
 2. Bundle ID: `com.metric.app.metric`.
 3. Download `GoogleService-Info.plist` and place it in:
    `ios/Runner/GoogleService-Info.plist`
-
-*Note: For local offline development and offline unit converter usage, the app includes an automatic offline fallback mode that works seamlessly even before Firebase configuration files are placed!*
