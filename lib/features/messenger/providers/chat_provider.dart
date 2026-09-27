@@ -61,6 +61,17 @@ class ChatNotifier extends Notifier<ChatState> {
   RealtimeChannel? _realtimeChannel;
   Timer? _pollTimer;
   static const _uuid = Uuid();
+  bool _isChatActive = false;
+
+  void setChatActive(bool active) {
+    _isChatActive = active;
+    if (active) {
+      markChatAsRead();
+      queryReadStatus();
+    }
+  }
+
+  bool get isChatActive => _isChatActive;
 
   @override
   ChatState build() {
@@ -132,7 +143,7 @@ class ChatNotifier extends Notifier<ChatState> {
     }
   }
 
-  /// Supabase Realtime listener for incoming ciphertext messages
+  /// Supabase Realtime listener for incoming ciphertext messages & read receipts
   void _connectRealtime({required String myUid, required String peerUid}) {
     final client = SupabaseConfig.client;
     if (client == null || !SupabaseConfig.isConfigured) return;
@@ -143,10 +154,12 @@ class ChatNotifier extends Notifier<ChatState> {
         _realtimeChannel = null;
       }
 
-      final channel = client.channel('chat_realtime_$myUid');
+      final participants = [myUid, peerUid]..sort();
+      final sharedChannelName = 'chat_shared_${participants.join('_')}';
+      final channel = client.channel(sharedChannelName);
       _realtimeChannel = channel;
 
-      // Listen to insert events without client-side column filters (Supabase RLS handles authorization)
+      // 1. Listen for incoming message inserts
       channel.onPostgresChanges(
         event: PostgresChangeEvent.insert,
         schema: 'public',
@@ -163,9 +176,52 @@ class ChatNotifier extends Notifier<ChatState> {
             await _processIncomingMessageRow(row, myUid, peerUid);
           }
         },
-      ).subscribe();
+      );
 
+      // 2. Listen for Read Receipts: when peer opens chat, turn ticks to BLUE!
+      channel.onBroadcast(
+        event: 'read_receipt',
+        callback: (payload) async {
+          final reader = payload['reader_uid'] as String?;
+          if (reader == peerUid) {
+            await LocalDatabaseService.markAllSentMessagesAsRead(peerUid);
+            final updated = await LocalDatabaseService.getMessages();
+            state = state.copyWith(messages: updated);
+          }
+        },
+      );
+
+      // 3. Listen for Delivery Receipts: when peer receives message, turn to double GREY ticks!
+      channel.onBroadcast(
+        event: 'delivery_receipt',
+        callback: (payload) async {
+          final recipient = payload['recipient_uid'] as String?;
+          if (recipient == peerUid) {
+            await LocalDatabaseService.markAllSentMessagesAsDelivered(peerUid);
+            final updated = await LocalDatabaseService.getMessages();
+            state = state.copyWith(messages: updated);
+          }
+        },
+      );
+
+      // 4. Listen for query read status: when peer opens chat and queries if messages are read
+      channel.onBroadcast(
+        event: 'query_read_status',
+        callback: (payload) async {
+          final requester = payload['requester_uid'] as String?;
+          if (requester == peerUid && _isChatActive) {
+            await markChatAsRead();
+          }
+        },
+      );
+
+      channel.subscribe();
       state = state.copyWith(isRealtimeConnected: true);
+
+      // Only notify peer of read status if chat is currently active/open
+      if (_isChatActive) {
+        markChatAsRead();
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[ChatProvider] Realtime connect notice: $e');
@@ -205,11 +261,60 @@ class ChatNotifier extends Notifier<ChatState> {
       await LocalDatabaseService.saveMessage(localMsg);
       final updated = await LocalDatabaseService.getMessages();
       state = state.copyWith(messages: updated);
+
+      // 1. ALWAYS notify sender that message has arrived on this device (Double GREY tick)
+      try {
+        _realtimeChannel?.sendBroadcastMessage(
+          event: 'delivery_receipt',
+          payload: {'recipient_uid': myUid, 'sender_uid': peerUid, 'msg_id': msgId},
+        );
+
+        // 2. ONLY notify sender of read receipt (Double BLUE tick) if user has chat ACTIVELY open!
+        if (_isChatActive) {
+          _realtimeChannel?.sendBroadcastMessage(
+            event: 'read_receipt',
+            payload: {'reader_uid': myUid, 'peer_uid': peerUid, 'timestamp': DateTime.now().millisecondsSinceEpoch},
+          );
+        }
+      } catch (_) {}
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[ChatProvider] Decrypt message error: $e');
       }
     }
+  }
+
+  /// Notify peer that this device opened the chat (turns peer's sent ticks to BLUE)
+  Future<void> markChatAsRead() async {
+    final peerUid = state.peerUid;
+    if (peerUid == null || peerUid.isEmpty) return;
+
+    try {
+      await _realtimeChannel?.sendBroadcastMessage(
+        event: 'read_receipt',
+        payload: {
+          'reader_uid': state.myUid,
+          'peer_uid': peerUid,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        },
+      );
+    } catch (_) {}
+  }
+
+  /// Query peer if they have opened/read sent messages
+  Future<void> queryReadStatus() async {
+    final peerUid = state.peerUid;
+    if (peerUid == null || peerUid.isEmpty) return;
+
+    try {
+      await _realtimeChannel?.sendBroadcastMessage(
+        event: 'query_read_status',
+        payload: {
+          'requester_uid': state.myUid,
+          'peer_uid': peerUid,
+        },
+      );
+    } catch (_) {}
   }
 
   /// Fetch messages from Supabase that arrived while device was offline or if Realtime dropped
@@ -256,6 +361,24 @@ class ChatNotifier extends Notifier<ChatState> {
       if (hasNew) {
         final updated = await LocalDatabaseService.getMessages();
         state = state.copyWith(messages: updated);
+
+        // Notify sender that messages were delivered to this device
+        try {
+          _realtimeChannel?.sendBroadcastMessage(
+            event: 'delivery_receipt',
+            payload: {'recipient_uid': myUid, 'sender_uid': peerUid},
+          );
+          if (_isChatActive) {
+            _realtimeChannel?.sendBroadcastMessage(
+              event: 'read_receipt',
+              payload: {
+                'reader_uid': myUid,
+                'peer_uid': peerUid,
+                'timestamp': DateTime.now().millisecondsSinceEpoch,
+              },
+            );
+          }
+        } catch (_) {}
       }
     } catch (e) {
       if (kDebugMode) {
@@ -407,6 +530,12 @@ class ChatNotifier extends Notifier<ChatState> {
     await LocalDatabaseService.deleteMessage(id);
     final updated = await LocalDatabaseService.getMessages();
     state = state.copyWith(messages: updated);
+  }
+
+  /// Purge all local decrypted messages
+  Future<void> clearAllMessages() async {
+    await LocalDatabaseService.clearAllMessages();
+    state = state.copyWith(messages: []);
   }
 }
 

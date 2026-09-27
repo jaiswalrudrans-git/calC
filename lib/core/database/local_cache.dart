@@ -243,6 +243,26 @@ class LocalDatabaseService {
     await db.update('messages', {'status': status}, where: 'id = ?', whereArgs: [messageId]);
   }
 
+  static Future<void> markAllSentMessagesAsRead(String peerUid) async {
+    final db = await database;
+    await db.update(
+      'messages',
+      {'status': 'read'},
+      where: 'isMe = 1 AND receiverUid = ? AND status != "read"',
+      whereArgs: [peerUid],
+    );
+  }
+
+  static Future<void> markAllSentMessagesAsDelivered(String peerUid) async {
+    final db = await database;
+    await db.update(
+      'messages',
+      {'status': 'delivered'},
+      where: 'isMe = 1 AND receiverUid = ? AND status = "sent"',
+      whereArgs: [peerUid],
+    );
+  }
+
   static Future<void> updateReaction(String messageId, String? reaction) async {
     final db = await database;
     await db.update('messages', {'reaction': reaction}, where: 'id = ?', whereArgs: [messageId]);

@@ -1,6 +1,8 @@
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:metric/core/security/signal_crypto.dart';
+import 'package:metric/core/security/secure_key_storage.dart';
 
 void main() {
   test('X25519 and Ed25519 key generation and signature verification', () async {
@@ -106,5 +108,18 @@ void main() {
     final envelope = EncryptedMessageEnvelope.fromMap(map);
     expect(envelope.senderUid, 'sender-abc');
     expect(envelope.receiverUid, 'receiver-xyz');
+  });
+
+  test('SecureKeyStorage default passcode and verification', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final defaultPass = await SecureKeyStorage.getPasscode();
+    expect(defaultPass, '1234');
+    expect(await SecureKeyStorage.verifyPasscode('1234'), isTrue);
+    expect(await SecureKeyStorage.verifyPasscode('9999'), isFalse);
+
+    await SecureKeyStorage.setPasscode('4321');
+    expect(await SecureKeyStorage.getPasscode(), '4321');
+    expect(await SecureKeyStorage.verifyPasscode('4321'), isTrue);
+    expect(await SecureKeyStorage.verifyPasscode('1234'), isFalse);
   });
 }

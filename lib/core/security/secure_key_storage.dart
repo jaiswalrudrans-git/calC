@@ -50,6 +50,7 @@ class SecureKeyStorage {
   static const _kDisappearingTimerSeconds = 'metric_disappearing_timer_seconds';
   static const _kSecretKnockSequence = 'metric_secret_knock_sequence';
   static const _kSafetyNumberVerified = 'metric_safety_number_verified';
+  static const _kPasscode = 'metric_vault_passcode';
 
   // --- Local Identity Keys ---
   static Future<void> saveIdentityKeyPair({
@@ -238,6 +239,27 @@ class SecureKeyStorage {
 
   static Future<void> setSafetyNumberVerified(bool verified) =>
       _storage.write(key: _kSafetyNumberVerified, value: verified.toString());
+
+  // --- Vault Passcode ---
+  static const _kDefaultPasscode = '1234';
+
+  static Future<String> getPasscode() async {
+    final value = await _storage.read(key: _kPasscode);
+    return value ?? _kDefaultPasscode;
+  }
+
+  static Future<void> setPasscode(String newPasscode) =>
+      _storage.write(key: _kPasscode, value: newPasscode);
+
+  static Future<bool> verifyPasscode(String entered) async {
+    final current = await getPasscode();
+    return current == entered.trim();
+  }
+
+  static Future<bool> hasCustomPasscode() async {
+    final value = await _storage.read(key: _kPasscode);
+    return value != null && value.isNotEmpty;
+  }
 
   // --- Debug Confirmation ---
   /// Debug-only check to log that both devices' public keys and UIDs are present

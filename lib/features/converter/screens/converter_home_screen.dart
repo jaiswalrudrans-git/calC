@@ -8,11 +8,9 @@ import '../providers/converter_provider.dart';
 import 'unit_detail_screen.dart';
 import 'conversion_history_screen.dart';
 import 'favorites_screen.dart';
-import '../../settings/screens/settings_screen.dart';
 import '../../messenger/screens/chat_screen.dart';
 import '../../pairing/screens/pairing_screen.dart';
 import '../../../core/security/secure_key_storage.dart';
-import '../../../core/security/privacy_guard.dart';
 
 class ConverterHomeScreen extends ConsumerStatefulWidget {
   const ConverterHomeScreen({super.key});
@@ -76,39 +74,34 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
   }
 
   /// Discrete access to the 1-to-1 End-to-End Encrypted Vault:
-  /// Triggered by long-pressing the header title or via settings
+  /// Triggered exclusively by the secret knock combination
   Future<void> _openSecretVault() async {
     HapticFeedback.heavyImpact();
+    _knockResetTimer?.cancel();
+    _knockSequence.clear();
 
-    // 1. Biometric verification
-    final authenticated = await PrivacyGuard.authenticate();
-    if (!authenticated && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Biometric verification required'),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
-      return;
-    }
-
-    if (!mounted) return;
-
-    // 2. Check if paired
     final isPaired = await SecureKeyStorage.isPaired();
     if (!mounted) return;
 
     if (isPaired) {
-      Navigator.push(
+      await Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const ChatScreen()),
       );
     } else {
-      Navigator.push(
+      await Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const PairingScreen()),
       );
+    }
+
+    // When user returns/hits back to normal metric app,
+    // clear knock sequence so they must enter the knock combination again!
+    if (mounted) {
+      setState(() {
+        _knockResetTimer?.cancel();
+        _knockSequence.clear();
+      });
     }
   }
 
@@ -176,64 +169,29 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
       slivers: [
-        // App Header
+        // App Header - 100% normal decoy unit converter header
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Title & Subtitle with hidden long-press vault trigger
-                GestureDetector(
-                  onLongPress: _openSecretVault,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Unit Converter',
-                        style: TextStyle(
-                          fontSize: 30,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.6,
-                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Quick. Accurate. Everyday.',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                        ),
-                      ),
-                    ],
+                Text(
+                  'Unit Converter',
+                  style: TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.6,
+                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
                   ),
                 ),
-                // Settings Icon (also allows vault access)
-                IconButton(
-                  onPressed: () {
-                    HapticFeedback.lightImpact();
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                    );
-                  },
-                  icon: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
-                      border: Border.all(
-                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-                      ),
-                    ),
-                    child: Icon(
-                      Icons.settings_outlined,
-                      size: 20,
-                      color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                    ),
+                const SizedBox(height: 2),
+                Text(
+                  'Quick. Accurate. Everyday.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
                   ),
                 ),
               ],

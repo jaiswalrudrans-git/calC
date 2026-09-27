@@ -46,4 +46,17 @@ kotlin {
 
 flutter {
     source = "../.."
+    target = "lib/main.dart"
 }
+
+project.afterEvaluate {
+    tasks.withType(com.flutter.gradle.tasks.BaseFlutterTask::class.java).configureEach {
+        targetPath = targetPath?.replace(Regex("[/\\\\]+"), "/")
+        doFirst {
+            targetPath = targetPath?.replace(Regex("[/\\\\]+"), "/")
+            println("[Metric Gradle Hook] Normalized targetPath: $targetPath")
+        }
+    }
+}
+
+
