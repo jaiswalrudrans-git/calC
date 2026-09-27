@@ -1,14 +1,22 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/security/privacy_guard.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../pairing/screens/pairing_screen.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../providers/chat_provider.dart';
+import '../widgets/voice_bubble_widget.dart';
+import 'image_viewer_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -22,11 +30,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _inputFocusNode = FocusNode();
+  final AudioRecorder _audioRecorder = AudioRecorder();
 
   bool _isSearching = false;
   String _searchQuery = '';
   bool _hasInputText = false;
   bool _isRecordingVoice = false;
+  String? _recordFilePath;
   Timer? _recordDurationTimer;
   int _recordSeconds = 0;
   int _previousMessageCount = 0;
@@ -65,6 +75,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _scrollController.dispose();
     _inputFocusNode.dispose();
     _recordDurationTimer?.cancel();
+    _audioRecorder.dispose();
     PrivacyGuard.setScreenProtection(false);
     super.dispose();
   }
@@ -107,22 +118,56 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  void _startVoiceRecord() {
-    HapticFeedback.heavyImpact();
-    setState(() {
-      _isRecordingVoice = true;
-      _recordSeconds = 0;
-    });
-
-    _recordDurationTimer?.cancel();
-    _recordDurationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) {
-        setState(() => _recordSeconds++);
+  Future<void> _startVoiceRecord() async {
+    try {
+      final hasPermission = await _audioRecorder.hasPermission();
+      if (!hasPermission) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Microphone permission required to record voice notes')),
+          );
+        }
+        return;
       }
-    });
+
+      final tempDir = await getTemporaryDirectory();
+      final filePath = p.join(
+        tempDir.path,
+        'rec_${DateTime.now().millisecondsSinceEpoch}.m4a',
+      );
+      _recordFilePath = filePath;
+
+      await _audioRecorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 64000,
+          sampleRate: 44100,
+        ),
+        path: filePath,
+      );
+
+      HapticFeedback.heavyImpact();
+      setState(() {
+        _isRecordingVoice = true;
+        _recordSeconds = 0;
+      });
+
+      _recordDurationTimer?.cancel();
+      _recordDurationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) {
+          setState(() => _recordSeconds++);
+        }
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not start voice recording: $e')),
+        );
+      }
+    }
   }
 
-  void _stopVoiceRecordAndSend() {
+  Future<void> _stopVoiceRecordAndSend() async {
     _recordDurationTimer?.cancel();
     HapticFeedback.mediumImpact();
 
@@ -134,23 +179,156 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _recordSeconds = 0;
     });
 
-    if (wasRecording && duration >= 1) {
-      final state = ref.read(chatProvider);
-      if (state.peerUid != null && state.peerUid!.isNotEmpty) {
-        // Voice note placeholder sending via E2E pipeline
-        ref.read(chatProvider.notifier).sendMessage('🎙️ Voice note (${duration}s)');
-        Future.delayed(const Duration(milliseconds: 80), () => _scrollToBottom());
+    if (wasRecording) {
+      try {
+        final path = await _audioRecorder.stop();
+        final finalPath = path ?? _recordFilePath;
+        if (duration >= 1 && finalPath != null) {
+          final file = File(finalPath);
+          if (await file.exists()) {
+            final bytes = await file.readAsBytes();
+            final fileName = 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+            await ref.read(chatProvider.notifier).sendMediaMessage(
+              rawBytes: bytes,
+              mediaType: 'voice',
+              fileName: fileName,
+              duration: duration,
+            );
+            Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to process voice note: $e')),
+          );
+        }
       }
     }
   }
 
-  void _cancelVoiceRecord() {
+  Future<void> _cancelVoiceRecord() async {
     _recordDurationTimer?.cancel();
     HapticFeedback.vibrate();
     setState(() {
       _isRecordingVoice = false;
       _recordSeconds = 0;
     });
+
+    try {
+      final path = await _audioRecorder.stop();
+      final finalPath = path ?? _recordFilePath;
+      if (finalPath != null) {
+        final file = File(finalPath);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _pickAndSendCamera() async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      final fileName = p.basename(picked.path);
+
+      await ref.read(chatProvider.notifier).sendMediaMessage(
+        rawBytes: bytes,
+        mediaType: 'image',
+        fileName: fileName,
+      );
+      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to capture photo: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickAndSendGallery() async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      final fileName = p.basename(picked.path);
+
+      await ref.read(chatProvider.notifier).sendMediaMessage(
+        rawBytes: bytes,
+        mediaType: 'image',
+        fileName: fileName,
+      );
+      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to select image: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickAndSendDocument() async {
+    try {
+      final files = await FilePicker.pickFiles(type: FileType.any);
+      if (files.isEmpty) return;
+
+      final picked = files.first;
+      final bytes = await picked.xFile.readAsBytes();
+
+      await ref.read(chatProvider.notifier).sendMediaMessage(
+        rawBytes: bytes,
+        mediaType: 'document',
+        fileName: picked.name,
+      );
+      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to select document: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickAndSendAudio() async {
+    try {
+      final files = await FilePicker.pickFiles(type: FileType.audio);
+      if (files.isEmpty) return;
+
+      final picked = files.first;
+      final bytes = await picked.xFile.readAsBytes();
+
+      await ref.read(chatProvider.notifier).sendMediaMessage(
+        rawBytes: bytes,
+        mediaType: 'voice',
+        fileName: picked.name,
+      );
+      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to select audio: $e')),
+        );
+      }
+    }
   }
 
   void _showAttachmentSheet() {
@@ -195,9 +373,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   color: AppColors.purpleIcon,
                   onTap: () {
                     Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Document attachment ready for Step 3')),
-                    );
+                    _pickAndSendDocument();
                   },
                 ),
                 _buildAttachmentOption(
@@ -206,9 +382,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   color: AppColors.roseIcon,
                   onTap: () {
                     Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('In-chat camera ready for Step 3')),
-                    );
+                    _pickAndSendCamera();
                   },
                 ),
                 _buildAttachmentOption(
@@ -217,9 +391,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   color: AppColors.blueIcon,
                   onTap: () {
                     Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Media gallery picker ready for Step 3')),
-                    );
+                    _pickAndSendGallery();
                   },
                 ),
                 _buildAttachmentOption(
@@ -228,9 +400,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   color: AppColors.orangeIcon,
                   onTap: () {
                     Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Audio note picker ready for Step 3')),
-                    );
+                    _pickAndSendAudio();
                   },
                 ),
               ],
@@ -360,6 +530,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _showMediaViewerSheet() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final allMedia = ref.read(chatProvider).messages
+        .where((m) => m.mediaType != null)
+        .toList()
+        .reversed
+        .toList();
+
+    final imageList = allMedia.where((m) => m.mediaType == 'image').toList();
+    final docList = allMedia.where((m) => m.mediaType == 'document').toList();
+    final voiceList = allMedia.where((m) => m.mediaType == 'voice').toList();
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -367,58 +547,171 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Media, Docs & Links',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded),
-                  onPressed: () => Navigator.pop(ctx),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            const Divider(),
-            const SizedBox(height: 16),
-            Center(
-              child: Column(
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Icon(
-                    Icons.perm_media_outlined,
-                    size: 48,
-                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                  ),
-                  const SizedBox(height: 12),
                   Text(
-                    'No Media Shared Yet',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                    ),
+                    'Media Vault (${allMedia.length})',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Photos, videos, and documents will appear here once Step 3 is activated.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                    ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.pop(ctx),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 24),
-          ],
+              const SizedBox(height: 8),
+              const Divider(),
+              const SizedBox(height: 10),
+              if (allMedia.isEmpty)
+                Expanded(
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.perm_media_outlined,
+                          size: 48,
+                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'No Media Shared Yet',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Photos, voice notes, and documents will appear here.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Expanded(
+                  child: ListView(
+                    controller: scrollController,
+                    children: [
+                      if (imageList.isNotEmpty) ...[
+                        Text(
+                          'PHOTOS (${imageList.length})',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        GridView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            crossAxisSpacing: 8,
+                            mainAxisSpacing: 8,
+                          ),
+                          itemCount: imageList.length,
+                          itemBuilder: (context, i) {
+                            final m = imageList[i];
+                            final hasFile = m.localPath != null && File(m.localPath!).existsSync();
+                            return GestureDetector(
+                              onTap: hasFile
+                                  ? () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => ImageViewerScreen(
+                                            filePath: m.localPath!,
+                                            title: m.text,
+                                            timestamp: m.timestamp,
+                                            heroTag: 'gallery_img_${m.id}',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  : null,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: hasFile
+                                    ? Image.file(File(m.localPath!), fit: BoxFit.cover)
+                                    : Container(
+                                        color: Colors.grey.shade300,
+                                        child: const Icon(Icons.image_not_supported_rounded),
+                                      ),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                      if (voiceList.isNotEmpty) ...[
+                        Text(
+                          'VOICE NOTES (${voiceList.length})',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ...voiceList.map((m) => Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: VoiceBubbleWidget(message: m, isDark: isDark),
+                            )),
+                        const SizedBox(height: 20),
+                      ],
+                      if (docList.isNotEmpty) ...[
+                        Text(
+                          'DOCUMENTS (${docList.length})',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ...docList.map((m) => Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: _buildDocumentContent(m, isDark),
+                            )),
+                      ],
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -1081,7 +1374,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         children: [
           Container(
             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+            padding: msg.mediaType == 'image'
+                ? const EdgeInsets.all(4)
+                : const EdgeInsets.fromLTRB(14, 10, 14, 8),
             decoration: BoxDecoration(
               color: msg.isMe
                   ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFE7FFDB))
@@ -1103,70 +1398,229 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             child: Column(
               crossAxisAlignment: msg.isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
+                _buildBubbleContent(msg, isDark),
+                const SizedBox(height: 3),
+                Padding(
+                  padding: msg.mediaType == 'image'
+                      ? const EdgeInsets.symmetric(horizontal: 6, vertical: 2)
+                      : EdgeInsets.zero,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        timeStr,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: isDark ? Colors.white60 : Colors.black45,
+                        ),
+                      ),
+                      if (msg.isMe) ...[
+                        const SizedBox(width: 4),
+                        if (msg.status == 'sending')
+                          const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey),
+                          )
+                        else if (msg.status == 'failed')
+                          GestureDetector(
+                            onTap: () {
+                              HapticFeedback.mediumImpact();
+                              ref.read(chatProvider.notifier).retryMessage(msg.id);
+                            },
+                            child: const Row(
+                              children: [
+                                Icon(Icons.error_outline_rounded, size: 13, color: AppColors.alertRed),
+                                SizedBox(width: 2),
+                                Text('Retry', style: TextStyle(fontSize: 10, color: AppColors.alertRed)),
+                              ],
+                            ),
+                          )
+                        else if (msg.status == 'read')
+                          const Icon(
+                            Icons.done_all_rounded,
+                            size: 14,
+                            color: Color(0xFF53BDEB), // WhatsApp blue ticks (opened & seen)
+                          )
+                        else if (msg.status == 'delivered')
+                          Icon(
+                            Icons.done_all_rounded,
+                            size: 14,
+                            color: isDark ? Colors.white60 : Colors.black45, // Double GREY ticks
+                          )
+                        else
+                          Icon(
+                            Icons.done_rounded,
+                            size: 14,
+                            color: isDark ? Colors.white60 : Colors.black45, // Single GREY tick (not yet seen)
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBubbleContent(LocalChatMessage msg, bool isDark) {
+    if (msg.mediaType == 'image') {
+      return _buildImageContent(msg, isDark);
+    } else if (msg.mediaType == 'voice') {
+      return VoiceBubbleWidget(message: msg, isDark: isDark);
+    } else if (msg.mediaType == 'document') {
+      return _buildDocumentContent(msg, isDark);
+    } else {
+      return Text(
+        msg.text,
+        style: TextStyle(
+          fontSize: 15,
+          height: 1.3,
+          color: msg.isMe
+              ? (isDark ? Colors.white : const Color(0xFF111B21))
+              : (isDark ? Colors.white : const Color(0xFF111B21)),
+        ),
+      );
+    }
+  }
+
+  Widget _buildImageContent(LocalChatMessage msg, bool isDark) {
+    final heroTag = 'img_${msg.id}';
+    final hasFile = msg.localPath != null && File(msg.localPath!).existsSync();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: hasFile
+              ? () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ImageViewerScreen(
+                        filePath: msg.localPath!,
+                        title: msg.text,
+                        timestamp: msg.timestamp,
+                        heroTag: heroTag,
+                      ),
+                    ),
+                  );
+                }
+              : null,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: SizedBox(
+              width: double.infinity,
+              height: 200,
+              child: hasFile
+                  ? Hero(
+                      tag: heroTag,
+                      child: Image.file(
+                        File(msg.localPath!),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          color: isDark ? Colors.black38 : Colors.grey.shade200,
+                          child: const Center(
+                            child: Icon(Icons.broken_image_rounded, size: 40, color: Colors.grey),
+                          ),
+                        ),
+                      ),
+                    )
+                  : Container(
+                      color: isDark ? Colors.black38 : Colors.grey.shade200,
+                      child: const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.lock_rounded, size: 36, color: AppColors.primary),
+                            SizedBox(height: 6),
+                            Text(
+                              'Encrypted Image',
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+        ),
+        if (msg.text.isNotEmpty &&
+            !msg.text.toLowerCase().endsWith('.jpg') &&
+            !msg.text.toLowerCase().endsWith('.jpeg') &&
+            !msg.text.toLowerCase().endsWith('.png'))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
+            child: Text(
+              msg.text,
+              style: TextStyle(
+                fontSize: 14,
+                color: msg.isMe
+                    ? (isDark ? Colors.white : const Color(0xFF111B21))
+                    : (isDark ? Colors.white : const Color(0xFF111B21)),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildDocumentContent(LocalChatMessage msg, bool isDark) {
+    final sizeStr = (msg.mediaSize != null && msg.mediaSize! > 0)
+        ? (msg.mediaSize! < 1024 * 1024
+            ? '${(msg.mediaSize! / 1024).toStringAsFixed(1)} KB'
+            : '${(msg.mediaSize! / (1024 * 1024)).toStringAsFixed(1)} MB')
+        : '';
+
+    return Container(
+      constraints: const BoxConstraints(minWidth: 200),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.purpleIcon.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.insert_drive_file_rounded,
+              color: AppColors.purpleIcon,
+              size: 26,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Text(
                   msg.text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 15,
-                    height: 1.3,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                     color: msg.isMe
                         ? (isDark ? Colors.white : const Color(0xFF111B21))
                         : (isDark ? Colors.white : const Color(0xFF111B21)),
                   ),
                 ),
-                const SizedBox(height: 3),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      timeStr,
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: isDark ? Colors.white60 : Colors.black45,
-                      ),
+                if (sizeStr.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    sizeStr,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? Colors.white60 : Colors.black45,
                     ),
-                    if (msg.isMe) ...[
-                      const SizedBox(width: 4),
-                      if (msg.status == 'sending')
-                        const SizedBox(
-                          width: 10,
-                          height: 10,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey),
-                        )
-                      else if (msg.status == 'failed')
-                        GestureDetector(
-                          onTap: () {
-                            HapticFeedback.mediumImpact();
-                            ref.read(chatProvider.notifier).retryMessage(msg.id);
-                          },
-                          child: const Row(
-                            children: [
-                              Icon(Icons.error_outline_rounded, size: 13, color: AppColors.alertRed),
-                              SizedBox(width: 2),
-                              Text('Retry', style: TextStyle(fontSize: 10, color: AppColors.alertRed)),
-                            ],
-                          ),
-                        )
-                      else if (msg.status == 'read')
-                        const Icon(
-                          Icons.done_all_rounded,
-                          size: 14,
-                          color: Color(0xFF53BDEB), // WhatsApp blue ticks (opened & seen)
-                        )
-                      else if (msg.status == 'delivered')
-                        Icon(
-                          Icons.done_all_rounded,
-                          size: 14,
-                          color: isDark ? Colors.white60 : Colors.black45, // Double GREY ticks
-                        )
-                      else
-                        Icon(
-                          Icons.done_rounded,
-                          size: 14,
-                          color: isDark ? Colors.white60 : Colors.black45, // Single GREY tick (not yet seen)
-                        ),
-                    ],
-                  ],
-                ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1273,9 +1727,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   IconButton(
                     onPressed: () {
                       HapticFeedback.lightImpact();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Quick camera capture ready for Step 3')),
-                      );
+                      _pickAndSendCamera();
                     },
                     icon: const Icon(Icons.camera_alt_rounded, size: 22),
                     color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -8,6 +9,7 @@ import '../../../core/database/local_cache.dart';
 import '../../../core/security/auth_service.dart';
 import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
+import '../../../core/security/media_crypto.dart';
 
 class ChatState {
   final bool isLoading;
@@ -229,6 +231,75 @@ class ChatNotifier extends Notifier<ChatState> {
     }
   }
 
+  /// Parse decrypted text payload into LocalChatMessage (supports text & media messages)
+  Future<LocalChatMessage> _parseDecryptedPayload({
+    required String msgId,
+    required String decryptedText,
+    required String senderUid,
+    required String receiverUid,
+    required int timestamp,
+    required bool isMe,
+  }) async {
+    // Check if decryptedText is an encrypted media envelope JSON
+    if (decryptedText.startsWith('{"type":"media"') || decryptedText.contains('"type":"media"')) {
+      try {
+        final map = jsonDecode(decryptedText) as Map<String, dynamic>;
+        if (map['type'] == 'media') {
+          final mediaType = map['media_type'] as String? ?? 'document';
+          final fileName = map['file_name'] as String? ?? 'file';
+          final keyHex = map['key_hex'] as String?;
+          final ivHex = map['iv_hex'] as String?;
+          final macHex = map['mac_hex'] as String?;
+          final dataBase64 = map['data_base64'] as String?;
+          final caption = map['caption'] as String?;
+          final duration = (map['duration'] as num?)?.toInt();
+          final fileSize = (map['file_size'] as num?)?.toInt();
+
+          String? localPath;
+          if (dataBase64 != null && keyHex != null && ivHex != null && macHex != null) {
+            final ciphertextBytes = base64Decode(dataBase64);
+            final decryptedBytes = await MediaCryptoService.decryptMediaBytes(
+              ciphertextBytes,
+              keyHex: keyHex,
+              ivHex: ivHex,
+              macHex: macHex,
+            );
+            localPath = await MediaCryptoService.saveToSandbox(
+              decryptedBytes,
+              '${msgId}_$fileName',
+            );
+          }
+
+          return LocalChatMessage(
+            id: msgId,
+            senderUid: senderUid,
+            receiverUid: receiverUid,
+            text: caption != null && caption.isNotEmpty ? caption : fileName,
+            timestamp: timestamp,
+            isMe: isMe,
+            status: 'sent',
+            mediaType: mediaType,
+            localPath: localPath,
+            mediaSize: fileSize,
+            duration: duration,
+          );
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('[ChatProvider] Parse media error: $e');
+      }
+    }
+
+    return LocalChatMessage(
+      id: msgId,
+      senderUid: senderUid,
+      receiverUid: receiverUid,
+      text: decryptedText,
+      timestamp: timestamp,
+      isMe: isMe,
+      status: 'sent',
+    );
+  }
+
   /// Process an incoming message row: decrypt with Signal ratchet & persist in local SQLite
   Future<void> _processIncomingMessageRow(
     Map<String, dynamic> row,
@@ -247,14 +318,13 @@ class ChatNotifier extends Notifier<ChatState> {
       final envelope = EncryptedMessageEnvelope.fromMap(row);
       final decryptedText = await SignalCryptoService.decryptPayload(envelope);
 
-      final localMsg = LocalChatMessage(
-        id: msgId,
+      final localMsg = await _parseDecryptedPayload(
+        msgId: msgId,
+        decryptedText: decryptedText,
         senderUid: peerUid,
         receiverUid: myUid,
-        text: decryptedText,
         timestamp: (row['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
         isMe: false,
-        status: 'sent',
       );
 
       // Cache decrypted message in local SQLite database
@@ -341,14 +411,13 @@ class ChatNotifier extends Notifier<ChatState> {
             final envelope = EncryptedMessageEnvelope.fromMap(row);
             final decryptedText = await SignalCryptoService.decryptPayload(envelope);
 
-            final localMsg = LocalChatMessage(
-              id: msgId,
+            final localMsg = await _parseDecryptedPayload(
+              msgId: msgId,
+              decryptedText: decryptedText,
               senderUid: peerUid,
               receiverUid: myUid,
-              text: decryptedText,
               timestamp: (row['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
               isMe: false,
-              status: 'sent',
             );
             await LocalDatabaseService.saveMessage(localMsg);
             hasNew = true;
@@ -385,6 +454,114 @@ class ChatNotifier extends Notifier<ChatState> {
         debugPrint('[ChatProvider] Fetch missed messages notice: $e');
       }
     }
+  }
+
+  /// Send an End-to-End Encrypted Media Message (Photo, Video, Voice Note, Document)
+  /// 1. Client-side EXIF stripping & compression (for photos)
+  /// 2. AES-256-GCM encryption of media bytes
+  /// 3. Save local decrypted copy in private sandbox
+  /// 4. Optimistic save in SQLite
+  /// 5. Signal session Double Ratchet encryption of media metadata & ciphertext
+  /// 6. Insert into Supabase messages table
+  Future<void> sendMediaMessage({
+    required Uint8List rawBytes,
+    required String mediaType, // 'image', 'video', 'voice', 'document'
+    required String fileName,
+    String? caption,
+    int? duration,
+  }) async {
+    final peerUid = state.peerUid;
+    if (peerUid == null || peerUid.isEmpty) {
+      state = state.copyWith(errorMessage: 'Cannot send: Device is not paired with a peer.');
+      return;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final msgId = _uuid.v4();
+
+    // 1. Client-side EXIF stripping & compression for images
+    Uint8List processedBytes = rawBytes;
+    if (mediaType == 'image') {
+      processedBytes = await MediaCryptoService.stripExifAndCompress(rawBytes);
+    }
+
+    // 2. Save local decrypted copy in private sandbox
+    final localPath = await MediaCryptoService.saveToSandbox(
+      processedBytes,
+      '${msgId}_$fileName',
+    );
+
+    // 3. Immediate optimistic local save
+    final displayText = caption != null && caption.isNotEmpty ? caption : fileName;
+    final pendingMsg = LocalChatMessage(
+      id: msgId,
+      senderUid: state.myUid,
+      receiverUid: peerUid,
+      text: displayText,
+      timestamp: now,
+      isMe: true,
+      status: 'sending',
+      mediaType: mediaType,
+      localPath: localPath,
+      mediaSize: processedBytes.length,
+      duration: duration,
+    );
+    await LocalDatabaseService.saveMessage(pendingMsg);
+    var updated = await LocalDatabaseService.getMessages();
+    state = state.copyWith(messages: updated, errorMessage: null);
+
+    // 4. Encrypt media bytes with AES-256-GCM
+    try {
+      final encryptedMedia = await MediaCryptoService.encryptMediaBytes(processedBytes);
+
+      final mediaEnvelope = jsonEncode({
+        'type': 'media',
+        'media_type': mediaType,
+        'file_name': fileName,
+        'file_size': processedBytes.length,
+        'duration': duration,
+        'caption': caption ?? '',
+        'key_hex': encryptedMedia.keyHex,
+        'iv_hex': encryptedMedia.ivHex,
+        'mac_hex': encryptedMedia.macHex,
+        'data_base64': base64Encode(encryptedMedia.ciphertext),
+      });
+
+      // 5. Encrypt with Signal session Double Ratchet
+      final signalEnvelope = await SignalCryptoService.encryptPayload(
+        plaintext: mediaEnvelope,
+        senderUid: state.myUid,
+        receiverUid: peerUid,
+      );
+
+      // 6. Write ciphertext to locked-down Supabase messages table
+      final client = SupabaseConfig.client;
+      if (client != null && SupabaseConfig.isConfigured) {
+        await client.from('messages').insert({
+          'id': msgId,
+          'sender_uid': state.myUid,
+          'recipient_uid': peerUid,
+          'ciphertext': signalEnvelope.ciphertextHex,
+          'iv': signalEnvelope.ivHex,
+          'mac': signalEnvelope.macHex,
+          'ephemeral_key': signalEnvelope.ephemeralPublicKeyHex,
+          'counter': signalEnvelope.counter,
+          'timestamp': signalEnvelope.timestamp,
+        });
+
+        await LocalDatabaseService.updateMessageStatus(msgId, 'sent');
+      } else {
+        await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+        state = state.copyWith(errorMessage: 'Network error: Supabase not connected.');
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[ChatProvider] Send media error: $e');
+      await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+      state = state.copyWith(errorMessage: 'Failed to deliver media: $e');
+    }
+
+    updated = await LocalDatabaseService.getMessages();
+    state = state.copyWith(messages: updated);
   }
 
   /// Send an End-to-End Encrypted Message

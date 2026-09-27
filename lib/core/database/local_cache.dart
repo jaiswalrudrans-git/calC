@@ -10,8 +10,11 @@ class LocalChatMessage {
   final int timestamp;
   final int? expiresAt;
   final bool isMe;
-  final String status; // 'sending', 'sent', 'failed'
-  final String? mediaType; // 'photo', 'video', 'voice', null
+  final String status; // 'sending', 'sent', 'delivered', 'read', 'failed'
+  final String? mediaType; // 'image', 'video', 'voice', 'document', null
+  final String? localPath;
+  final int? mediaSize;
+  final int? duration;
   final String? reaction;
 
   LocalChatMessage({
@@ -24,6 +27,9 @@ class LocalChatMessage {
     required this.isMe,
     this.status = 'sent',
     this.mediaType,
+    this.localPath,
+    this.mediaSize,
+    this.duration,
     this.reaction,
   });
 
@@ -38,6 +44,9 @@ class LocalChatMessage {
       'isMe': isMe ? 1 : 0,
       'status': status,
       'mediaType': mediaType,
+      'localPath': localPath,
+      'mediaSize': mediaSize,
+      'duration': duration,
       'reaction': reaction,
     };
   }
@@ -53,6 +62,9 @@ class LocalChatMessage {
       isMe: (map['isMe'] as int) == 1,
       status: map['status'] as String? ?? 'sent',
       mediaType: map['mediaType'] as String?,
+      localPath: map['localPath'] as String?,
+      mediaSize: (map['mediaSize'] as num?)?.toInt(),
+      duration: (map['duration'] as num?)?.toInt(),
       reaction: map['reaction'] as String?,
     );
   }
@@ -139,6 +151,9 @@ class LocalDatabaseService {
               isMe INTEGER,
               status TEXT DEFAULT 'sent',
               mediaType TEXT,
+              localPath TEXT,
+              mediaSize INTEGER,
+              duration INTEGER,
               reaction TEXT
             )
           ''');
@@ -157,16 +172,16 @@ class LocalDatabaseService {
           ''');
         },
         onUpgrade: (db, oldVersion, newVersion) async {
-          if (oldVersion < 2) {
-            try {
-              await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
-            } catch (_) {}
-          }
+          try { await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"'); } catch (_) {}
+          try { await db.execute('ALTER TABLE messages ADD COLUMN localPath TEXT'); } catch (_) {}
+          try { await db.execute('ALTER TABLE messages ADD COLUMN mediaSize INTEGER'); } catch (_) {}
+          try { await db.execute('ALTER TABLE messages ADD COLUMN duration INTEGER'); } catch (_) {}
         },
         onOpen: (db) async {
-          try {
-            await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
-          } catch (_) {}
+          try { await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"'); } catch (_) {}
+          try { await db.execute('ALTER TABLE messages ADD COLUMN localPath TEXT'); } catch (_) {}
+          try { await db.execute('ALTER TABLE messages ADD COLUMN mediaSize INTEGER'); } catch (_) {}
+          try { await db.execute('ALTER TABLE messages ADD COLUMN duration INTEGER'); } catch (_) {}
         },
       );
     } catch (_) {
@@ -184,12 +199,16 @@ class LocalDatabaseService {
           isMe INTEGER,
           status TEXT DEFAULT 'sent',
           mediaType TEXT,
+          localPath TEXT,
+          mediaSize INTEGER,
+          duration INTEGER,
           reaction TEXT
         )
       ''');
-      try {
-        await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
-      } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"'); } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN localPath TEXT'); } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN mediaSize INTEGER'); } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN duration INTEGER'); } catch (_) {}
       await db.execute('''
         CREATE TABLE IF NOT EXISTS conversions (
           id TEXT PRIMARY KEY,
@@ -215,9 +234,10 @@ class LocalDatabaseService {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     } catch (_) {
-      try {
-        await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"');
-      } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN status TEXT DEFAULT "sent"'); } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN localPath TEXT'); } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN mediaSize INTEGER'); } catch (_) {}
+      try { await db.execute('ALTER TABLE messages ADD COLUMN duration INTEGER'); } catch (_) {}
       await db.insert(
         'messages',
         message.toMap(),

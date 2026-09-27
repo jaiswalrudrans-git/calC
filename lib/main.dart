@@ -48,7 +48,7 @@ Future<void> _initializeBackgroundServices() async {
     if (SupabaseConfig.isConfigured) {
       await Supabase.initialize(
         url: SupabaseConfig.url,
-        anonKey: SupabaseConfig.anonKey,
+        publishableKey: SupabaseConfig.anonKey,
       );
     }
   } catch (e) {
