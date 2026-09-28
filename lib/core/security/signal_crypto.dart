@@ -567,6 +567,57 @@ class SignalCryptoService {
     return newContact;
   }
 
+  /// Ensure Double Ratchet session keys are derived for a contact using mutual 6-digit connect codes
+  static Future<void> ensureRatchetKeysForContact(ChatContact contact) async {
+    final myConnectCode = await SecureKeyStorage.getMyConnectCode() ?? '';
+    final cleanMyCode = myConnectCode.replaceAll(RegExp(r'[^0-9]'), '');
+    final cleanPeerCode = contact.connectCode.replaceAll(RegExp(r'[^0-9]'), '');
+
+    if (cleanMyCode.length == 6 && cleanPeerCode.length == 6) {
+      final codes = [cleanMyCode, cleanPeerCode]..sort();
+      final combinedKeyInfo = utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}');
+
+      final derivedRoot = await _hkdf.deriveKey(
+        secretKey: SecretKey(combinedKeyInfo),
+        nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+        info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+      );
+      final rootKey = (await derivedRoot.extractBytes()).sublist(0, 32);
+
+      final derivedChain1 = await _hkdf.deriveKey(
+        secretKey: SecretKey(combinedKeyInfo),
+        nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+        info: utf8.encode('CHAIN_${codes[0]}_TO_${codes[1]}'),
+      );
+      final chain0To1 = (await derivedChain1.extractBytes()).sublist(32, 64);
+
+      final derivedChain2 = await _hkdf.deriveKey(
+        secretKey: SecretKey(combinedKeyInfo),
+        nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+        info: utf8.encode('CHAIN_${codes[1]}_TO_${codes[0]}'),
+      );
+      final chain1To0 = (await derivedChain2.extractBytes()).sublist(32, 64);
+
+      final isFirst = cleanMyCode == codes[0];
+      final sendChain = isFirst ? chain0To1 : chain1To0;
+      final recvChain = isFirst ? chain1To0 : chain0To1;
+
+      await SecureKeyStorage.savePeerRatchetKeys(
+        peerUid: contact.uid,
+        rootKeyHex: _bytesToHex(rootKey),
+        sendChainKeyHex: _bytesToHex(sendChain),
+        recvChainKeyHex: _bytesToHex(recvChain),
+      );
+
+      if (contact.publicKeyHex != null && contact.publicKeyHex!.isNotEmpty) {
+        await SecureKeyStorage.savePairedPeer(
+          peerUid: contact.uid,
+          peerPublicKeyHex: contact.publicKeyHex!,
+        );
+      }
+    }
+  }
+
   /// Publish this device's connect code and public key bundle to Firebase Spark (Cloud Firestore)
   static Future<void> publishMyConnectCode() async {
     final firestore = FirebaseConfig.firestore;

@@ -30,6 +30,13 @@ void main() async {
     ),
   );
 
+  // Initialize Firebase Spark
+  try {
+    await FirebaseConfig.init();
+  } catch (e) {
+    debugPrint('[Metric Firebase Init] $e');
+  }
+
   runApp(
     const ProviderScope(
       child: MetricApp(),
@@ -41,12 +48,6 @@ void main() async {
 }
 
 Future<void> _initializeBackgroundServices() async {
-  try {
-    await FirebaseConfig.init();
-  } catch (e) {
-    debugPrint('[Metric Firebase Init] $e');
-  }
-
   try {
     await SignalCryptoService.ensurePrekeyBundle();
     await PrivacyGuard.setScreenProtection(true);

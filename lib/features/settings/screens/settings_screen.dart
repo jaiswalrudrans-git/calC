@@ -232,7 +232,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     navigatorKey.currentState?.popUntil((route) => route.isFirst);
 
     final currentCtx = navigatorKey.currentContext;
-    if (currentCtx != null) {
+    if (currentCtx != null && currentCtx.mounted) {
       ScaffoldMessenger.of(currentCtx).showSnackBar(
         const SnackBar(
           content: Row(
@@ -782,7 +782,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       setState(() => _driveBackupEnabled = val);
                       if (val && _driveEmail == null) {
                         final result = await GoogleDriveBackupService.instance.signIn();
-                        if (!mounted) return;
+                        if (!mounted || !context.mounted) return;
                         if (result.success) {
                           _loadSettings();
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -835,7 +835,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               FilledButton.tonal(
                                 onPressed: () async {
                                   final result = await GoogleDriveBackupService.instance.signIn();
-                                  if (!mounted) return;
+                                  if (!mounted || !context.mounted) return;
                                   if (result.success) {
                                     _loadSettings();
                                     ScaffoldMessenger.of(context).showSnackBar(

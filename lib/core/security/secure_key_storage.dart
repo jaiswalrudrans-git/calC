@@ -174,6 +174,15 @@ class SecureKeyStorage {
     if (capped.isNotEmpty) {
       await _storage.write(key: _kPairingComplete, value: 'true');
     }
+    final firestore = FirebaseConfig.firestore;
+    final myUid = await getMyDeviceId();
+    if (firestore != null && myUid != null && myUid.isNotEmpty) {
+      try {
+        await firestore.collection('users').doc(myUid).set({
+          'contacts': capped.map((c) => c.toMap()).toList(),
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    }
   }
 
   static Future<bool> addContact(ChatContact contact) async {

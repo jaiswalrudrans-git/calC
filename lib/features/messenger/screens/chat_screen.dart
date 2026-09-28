@@ -196,7 +196,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
       builder: (ctx) => FutureBuilder<int?>(
         future: SecureKeyStorage.getDisappearingTimerSeconds(),
-        builder: (context, snapshot) {
+        builder: (fbCtx, snapshot) {
           final currentSeconds = snapshot.data ?? 0;
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 20),
@@ -231,7 +231,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     onTap: () async {
                       await SecureKeyStorage.setDisappearingTimerSeconds(seconds);
                       if (ctx.mounted) Navigator.pop(ctx);
-                      if (mounted) {
+                      if (mounted && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(seconds == 0

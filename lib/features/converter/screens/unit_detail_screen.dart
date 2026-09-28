@@ -191,13 +191,13 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: isTarget
-              ? widget.category.iconColor.withOpacity(0.4)
+              ? widget.category.iconColor.withValues(alpha: 0.4)
               : (isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight),
           width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.2 : 0.03),
+            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -373,7 +373,7 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
+            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
             blurRadius: 16,
             offset: const Offset(0, -4),
           ),

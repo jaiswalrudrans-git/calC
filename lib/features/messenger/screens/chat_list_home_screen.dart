@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -31,11 +32,18 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
   List<ChatContact> _contacts = [];
   Map<String, LocalChatMessage?> _lastMessages = {};
   bool _isLoading = true;
+  StreamSubscription<DocumentSnapshot>? _userDocSub;
 
   @override
   void initState() {
     super.initState();
     _loadState();
+  }
+
+  @override
+  void dispose() {
+    _userDocSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadState() async {
@@ -44,8 +52,8 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     var contactsList = await SecureKeyStorage.getContacts();
     final myUid = await AccountAuthService.getCurrentUserUid();
 
-    // If local cache is empty (e.g. fresh install / app reset), restore from Firestore
-    if (contactsList.isEmpty && myUid != null && myUid.isNotEmpty) {
+    // Sync with Firestore contacts (both for restoring and discovering peer additions)
+    if (myUid != null && myUid.isNotEmpty) {
       final firestore = FirebaseConfig.firestore;
       if (firestore != null) {
         try {
@@ -53,14 +61,49 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           if (userDoc.exists) {
             final raw = userDoc.data()?['contacts'] as List<dynamic>?;
             if (raw != null && raw.isNotEmpty) {
-              contactsList = raw
+              final remoteList = raw
                   .map((e) => ChatContact.fromMap(Map<String, dynamic>.from(e as Map)))
                   .take(5)
                   .toList();
-              await SecureKeyStorage.saveContacts(contactsList);
+              bool hasNew = false;
+              for (final rc in remoteList) {
+                final exists = contactsList.any((c) => c.uid == rc.uid);
+                if (!exists && contactsList.length < 5) {
+                  contactsList.add(rc);
+                  await SignalCryptoService.ensureRatchetKeysForContact(rc);
+                  hasNew = true;
+                }
+              }
+              if (hasNew || (contactsList.isEmpty && remoteList.isNotEmpty)) {
+                await SecureKeyStorage.saveContacts(contactsList);
+              }
             }
           }
         } catch (_) {}
+
+        // Listen for realtime contact updates from peers
+        _userDocSub ??= firestore.collection('users').doc(myUid).snapshots().listen((snap) async {
+          if (!snap.exists || !mounted) return;
+          final raw = snap.data()?['contacts'] as List<dynamic>?;
+          if (raw == null) return;
+          final remoteList = raw
+              .map((e) => ChatContact.fromMap(Map<String, dynamic>.from(e as Map)))
+              .take(5)
+              .toList();
+          final current = await SecureKeyStorage.getContacts();
+          bool changed = false;
+          for (final rc in remoteList) {
+            if (!current.any((c) => c.uid == rc.uid) && current.length < 5) {
+              current.add(rc);
+              await SignalCryptoService.ensureRatchetKeysForContact(rc);
+              changed = true;
+            }
+          }
+          if (changed) {
+            await SecureKeyStorage.saveContacts(current);
+            _loadState();
+          }
+        });
       }
     }
 
@@ -176,10 +219,10 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
-        builder: (context, setSheetState) {
+        builder: (sbCtx, setSheetState) {
           return Padding(
             padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom,
+              bottom: MediaQuery.of(sbCtx).viewInsets.bottom,
             ),
             child: Container(
               decoration: BoxDecoration(
@@ -340,7 +383,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                               final contact = await SignalCryptoService.initiateUnilateralPairing(clean);
                               if (ctx.mounted) Navigator.pop(ctx);
                               await _loadState();
-                              if (mounted) {
+                              if (mounted && context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text('Connected with ${contact.username}!'),
@@ -406,9 +449,9 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           FilledButton(
             onPressed: () async {
               await SecureKeyStorage.removeContact(contact.uid);
-              Navigator.pop(ctx);
+              if (ctx.mounted) Navigator.pop(ctx);
               await _loadState();
-              if (mounted) {
+              if (mounted && context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('Removed ${contact.username}')),
                 );
