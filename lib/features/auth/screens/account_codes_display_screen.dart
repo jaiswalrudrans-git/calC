@@ -34,7 +34,9 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
           children: [
             Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
             SizedBox(width: 10),
-            Text('Connect code copied! Share this with contacts.'),
+            Expanded(
+              child: Text('Connect code copied! Share this with contacts.'),
+            ),
           ],
         ),
         backgroundColor: AppColors.primary,
@@ -56,7 +58,9 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
           children: [
             Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
             SizedBox(width: 10),
-            Text('Recovery code copied! Store it in a safe place.'),
+            Expanded(
+              child: Text('Recovery code copied! Store it in a safe place.'),
+            ),
           ],
         ),
         backgroundColor: AppColors.secureGreen,

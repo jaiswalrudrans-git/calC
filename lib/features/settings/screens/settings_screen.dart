@@ -239,7 +239,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
               SizedBox(width: 10),
-              Text('Logged out successfully. All credentials removed.'),
+              Expanded(
+                child: Text('Logged out successfully. All credentials removed.'),
+              ),
             ],
           ),
           backgroundColor: AppColors.primary,

@@ -645,10 +645,5 @@ class AccountAuthService {
     try {
       await GoogleDriveBackupService.instance.signOut();
     } catch (_) {}
-
-    // 4. Sign out of Firebase Auth
-    try {
-      await FirebaseConfig.auth?.signOut();
-    } catch (_) {}
   }
 }

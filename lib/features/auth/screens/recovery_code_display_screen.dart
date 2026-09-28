@@ -35,7 +35,9 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
           children: [
             Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
             SizedBox(width: 10),
-            Text('Recovery code copied to clipboard!'),
+            Expanded(
+              child: Text('Recovery code copied to clipboard!'),
+            ),
           ],
         ),
         backgroundColor: AppColors.secureGreen,

@@ -182,7 +182,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                       children: [
                         Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
                         SizedBox(width: 10),
-                        Text('Password reset! Please log in with your new password.'),
+                        Expanded(
+                          child: Text('Password reset! Please log in with your new password.'),
+                        ),
                       ],
                     ),
                     backgroundColor: AppColors.secureGreen,
@@ -203,7 +205,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               children: [
                 Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
                 SizedBox(width: 10),
-                Text('Password reset! Please log in with your new password.'),
+                Expanded(
+                  child: Text('Password reset! Please log in with your new password.'),
+                ),
               ],
             ),
             backgroundColor: AppColors.secureGreen,

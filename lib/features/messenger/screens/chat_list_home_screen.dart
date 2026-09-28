@@ -95,7 +95,9 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           children: [
             const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
             const SizedBox(width: 8),
-            Text('Connect code $_connectCode copied!'),
+            Expanded(
+              child: Text('Connect code $_connectCode copied!'),
+            ),
           ],
         ),
         backgroundColor: AppColors.secureGreen,
