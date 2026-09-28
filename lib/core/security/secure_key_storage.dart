@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../config/firebase_config.dart';
 import '../../features/messenger/models/chat_contact.dart';
 
 /// Secure hardware-backed key storage
@@ -198,6 +200,15 @@ class SecureKeyStorage {
     if (current.isEmpty) {
       await _storage.delete(key: _kPairingComplete);
     }
+    final firestore = FirebaseConfig.firestore;
+    final myUid = await getMyDeviceId();
+    if (firestore != null && myUid != null && myUid.isNotEmpty) {
+      try {
+        await firestore.collection('users').doc(myUid).set({
+          'contacts': current.map((c) => c.toMap()).toList(),
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    }
   }
 
   // --- Paired Peer Bundle Info ---
@@ -260,7 +271,14 @@ class SecureKeyStorage {
 
   static Future<String?> getRemoteIdentityPublicKeyForPeer(String peerUid) async {
     final key = await _storage.read(key: '${_kRemoteIdentityPublicKey}_$peerUid');
-    return key ?? getRemoteIdentityPublicKey();
+    if (key != null && key.isNotEmpty) return key;
+    final contacts = await getContacts();
+    for (final c in contacts) {
+      if (c.uid == peerUid && c.publicKeyHex != null && c.publicKeyHex!.isNotEmpty) {
+        return c.publicKeyHex;
+      }
+    }
+    return getRemoteIdentityPublicKey();
   }
 
   static Future<String?> getRemoteSignedPrekeyForPeer(String peerUid) async {

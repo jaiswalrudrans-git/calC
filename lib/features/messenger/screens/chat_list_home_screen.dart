@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import '../../../core/config/firebase_config.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
@@ -40,9 +41,29 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
   Future<void> _loadState() async {
     final user = await AccountAuthService.getCurrentUsername();
     final code = await AccountAuthService.getCurrentConnectCode();
-    final contactsList = await SecureKeyStorage.getContacts();
-
+    var contactsList = await SecureKeyStorage.getContacts();
     final myUid = await AccountAuthService.getCurrentUserUid();
+
+    // If local cache is empty (e.g. fresh install / app reset), restore from Firestore
+    if (contactsList.isEmpty && myUid != null && myUid.isNotEmpty) {
+      final firestore = FirebaseConfig.firestore;
+      if (firestore != null) {
+        try {
+          final userDoc = await firestore.collection('users').doc(myUid).get();
+          if (userDoc.exists) {
+            final raw = userDoc.data()?['contacts'] as List<dynamic>?;
+            if (raw != null && raw.isNotEmpty) {
+              contactsList = raw
+                  .map((e) => ChatContact.fromMap(Map<String, dynamic>.from(e as Map)))
+                  .take(5)
+                  .toList();
+              await SecureKeyStorage.saveContacts(contactsList);
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
     final Map<String, LocalChatMessage?> lastMsgs = {};
     for (final contact in contactsList) {
       lastMsgs[contact.uid] = await LocalDatabaseService.getLastMessageForPeer(contact.uid, myUid: myUid);

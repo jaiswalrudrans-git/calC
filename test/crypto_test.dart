@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:metric/core/security/signal_crypto.dart';
 import 'package:metric/core/security/secure_key_storage.dart';
+import 'package:metric/features/messenger/models/chat_contact.dart';
 
 void main() {
   test('X25519 and Ed25519 key generation and signature verification', () async {
@@ -131,5 +132,101 @@ void main() {
     await SecureKeyStorage.setSecretKnockSequence(['mass', 'temperature', 'speed']);
     final customSeq = await SecureKeyStorage.getSecretKnockSequence();
     expect(customSeq, ['mass', 'temperature', 'speed']);
+  });
+
+  test('Sender and Receiver can BOTH decrypt message encrypted via SignalCryptoService', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+
+    const uidA = 'user-alice-111';
+    const uidB = 'user-bob-222';
+    const codeA = '111-222';
+    const codeB = '333-444';
+
+    // Set up Alice's device
+    await SecureKeyStorage.saveMyDeviceId(uidA);
+    await SecureKeyStorage.saveMyConnectCode(codeA);
+    await SignalCryptoService.ensurePrekeyBundle(userAccountSeed: uidA);
+    await SecureKeyStorage.addContact(ChatContact(
+      uid: uidB,
+      username: 'Bob',
+      connectCode: codeB,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
+
+    // Alice encrypts message to Bob
+    const originalText = 'Hello Bob, this is a secret signal!';
+    final envelope = await SignalCryptoService.encryptPayload(
+      plaintext: originalText,
+      senderUid: uidA,
+      receiverUid: uidB,
+    );
+
+    // Alice can decrypt her own sent message!
+    final aliceDecrypted = await SignalCryptoService.decryptPayload(envelope);
+    expect(aliceDecrypted, equals(originalText));
+
+    // Now switch to Bob's device perspective
+    FlutterSecureStorage.setMockInitialValues({});
+    await SecureKeyStorage.saveMyDeviceId(uidB);
+    await SecureKeyStorage.saveMyConnectCode(codeB);
+    await SignalCryptoService.ensurePrekeyBundle(userAccountSeed: uidB);
+    await SecureKeyStorage.addContact(ChatContact(
+      uid: uidA,
+      username: 'Alice',
+      connectCode: codeA,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
+
+    // Bob can decrypt the message received from Alice!
+    final bobDecrypted = await SignalCryptoService.decryptPayload(envelope);
+    expect(bobDecrypted, equals(originalText));
+  });
+
+  test('Rejoining friend after app reset restores message readability without [Encrypted Signal Message]', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+
+    const uidA = 'user-alice-111';
+    const uidB = 'user-bob-222';
+    const codeA = '111-222';
+    const codeB = '333-444';
+
+    // Alice sets up and encrypts message
+    await SecureKeyStorage.saveMyDeviceId(uidA);
+    await SecureKeyStorage.saveMyConnectCode(codeA);
+    await SignalCryptoService.ensurePrekeyBundle(userAccountSeed: uidA);
+    await SecureKeyStorage.addContact(ChatContact(
+      uid: uidB,
+      username: 'Bob',
+      connectCode: codeB,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
+
+    const historicalMessage = 'Remember the secret code: 42!';
+    final historicalEnvelope = await SignalCryptoService.encryptPayload(
+      plaintext: historicalMessage,
+      senderUid: uidA,
+      receiverUid: uidB,
+    );
+
+    // SIMULATE APP RESET: Secure storage is wiped completely!
+    FlutterSecureStorage.setMockInitialValues({});
+
+    // User logs in again: permanent keys re-derived deterministically, contact restored
+    await SecureKeyStorage.saveMyDeviceId(uidA);
+    await SecureKeyStorage.saveMyConnectCode(codeA);
+    await SignalCryptoService.ensurePrekeyBundle(userAccountSeed: uidA);
+
+    // User connects back to friend Bob
+    await SecureKeyStorage.addContact(ChatContact(
+      uid: uidB,
+      username: 'Bob',
+      connectCode: codeB,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
+
+    // Historical message from Firestore is decrypted:
+    final restoredDecrypted = await SignalCryptoService.decryptPayload(historicalEnvelope);
+    expect(restoredDecrypted, equals(historicalMessage));
+    expect(restoredDecrypted.contains('[Encrypted'), isFalse);
   });
 }

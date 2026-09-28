@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../../../../core/config/firebase_config.dart';
 import '../../../../core/security/secure_key_storage.dart';
 import '../../../../core/backup/google_drive_backup_service.dart';
+import '../../../../core/security/signal_crypto.dart';
 import '../../messenger/models/chat_contact.dart';
 
 /// Result object returned by AccountAuthService operations
@@ -74,6 +75,7 @@ class AccountAuthService {
   );
 
   static final _sha256 = Sha256();
+  static final _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 64);
   static final _random = Random.secure();
   static const _uuid = Uuid();
 
@@ -115,6 +117,10 @@ class AccountAuthService {
   /// Generate a 16-byte random cryptographic salt as hex
   static String _generateSalt() {
     final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  static String _bytesToHex(List<int> bytes) {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
@@ -267,6 +273,10 @@ class AccountAuthService {
     await _storage.write(key: 'metric_auth_current_user', value: u);
     await _storage.write(key: 'metric_auth_is_logged_in', value: 'true');
 
+    // Deterministically initialize keys and publish bundle
+    await SignalCryptoService.ensurePrekeyBundle(userAccountSeed: stableUid);
+    await SignalCryptoService.publishMyConnectCode();
+
     return AuthResult.ok(
       recoveryCode: plainRecoveryCode,
       connectCode: connectCode,
@@ -286,47 +296,49 @@ class AccountAuthService {
     var storedPwdHash = await _storage.read(key: 'metric_auth_user_${u}_pwd_hash');
     var stableUid = await _storage.read(key: 'metric_auth_user_${u}_uid');
     var connectCode = await _storage.read(key: 'metric_auth_user_${u}_connect_code');
+    List<dynamic>? remoteContactsRaw;
 
-    // If credentials are not cached locally, query Firebase Cloud Firestore
-    if (pwdSalt == null || storedPwdHash == null) {
-      final firestore = FirebaseConfig.firestore;
-      if (firestore != null) {
-        try {
+    final firestore = FirebaseConfig.firestore;
+
+    // Check Cloud Firestore for this user (handles fresh installs / reset app or multi-device)
+    if (firestore != null) {
+      try {
+        DocumentSnapshot<Map<String, dynamic>>? doc;
+        if (stableUid != null && stableUid.isNotEmpty) {
+          final sDoc = await firestore.collection('users').doc(stableUid).get();
+          if (sDoc.exists) doc = sDoc;
+        }
+        if (doc == null || !doc.exists) {
           final query = await firestore
               .collection('users')
               .where('username', isEqualTo: u)
               .limit(1)
               .get();
           if (query.docs.isNotEmpty) {
-            final data = query.docs.first.data();
-            pwdSalt = data['pwd_salt'] as String?;
-            storedPwdHash = data['pwd_hash'] as String?;
-            stableUid = data['uid'] as String?;
-            connectCode = data['connect_code'] as String?;
-            final recoverySalt = data['recovery_salt'] as String?;
-            final recoveryHash = data['recovery_hash'] as String?;
-
-            if (pwdSalt != null && storedPwdHash != null) {
-              await _storage.write(key: 'metric_auth_user_${u}_pwd_salt', value: pwdSalt);
-              await _storage.write(key: 'metric_auth_user_${u}_pwd_hash', value: storedPwdHash);
-              if (stableUid != null) await _storage.write(key: 'metric_auth_user_${u}_uid', value: stableUid);
-              if (connectCode != null) await _storage.write(key: 'metric_auth_user_${u}_connect_code', value: connectCode);
-              if (recoverySalt != null) await _storage.write(key: 'metric_auth_user_${u}_recovery_salt', value: recoverySalt);
-              if (recoveryHash != null) await _storage.write(key: 'metric_auth_user_${u}_recovery_hash', value: recoveryHash);
-
-              // Restore contacts list from Firestore (capped at 5)
-              final rawContacts = data['contacts'] as List<dynamic>?;
-              if (rawContacts != null) {
-                final contacts = rawContacts
-                    .map((item) => ChatContact.fromMap(item as Map<String, dynamic>))
-                    .toList();
-                await SecureKeyStorage.saveContacts(contacts);
-              }
-            }
+            doc = query.docs.first;
           }
-        } catch (e) {
-          if (kDebugMode) debugPrint('[AccountAuthService] Firestore login query notice: $e');
         }
+        if (doc != null && doc.exists) {
+          final data = doc.data()!;
+          pwdSalt ??= data['pwd_salt'] as String?;
+          storedPwdHash ??= data['pwd_hash'] as String?;
+          stableUid ??= data['uid'] as String?;
+          connectCode ??= data['connect_code'] as String?;
+          final recoverySalt = data['recovery_salt'] as String?;
+          final recoveryHash = data['recovery_hash'] as String?;
+          remoteContactsRaw = data['contacts'] as List<dynamic>?;
+
+          if (pwdSalt != null && storedPwdHash != null) {
+            await _storage.write(key: 'metric_auth_user_${u}_pwd_salt', value: pwdSalt);
+            await _storage.write(key: 'metric_auth_user_${u}_pwd_hash', value: storedPwdHash);
+            if (stableUid != null) await _storage.write(key: 'metric_auth_user_${u}_uid', value: stableUid);
+            if (connectCode != null) await _storage.write(key: 'metric_auth_user_${u}_connect_code', value: connectCode);
+            if (recoverySalt != null) await _storage.write(key: 'metric_auth_user_${u}_recovery_salt', value: recoverySalt);
+            if (recoveryHash != null) await _storage.write(key: 'metric_auth_user_${u}_recovery_hash', value: recoveryHash);
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('[AccountAuthService] Firestore login query notice: $e');
       }
     }
 
@@ -349,19 +361,28 @@ class AccountAuthService {
       await _storage.write(key: 'metric_auth_user_${u}_connect_code', value: connectCode);
     }
 
-    // Restore contacts specific to this user account
-    final userContactsJson = await _storage.read(key: 'metric_contacts_$u');
-    if (userContactsJson != null && userContactsJson.isNotEmpty) {
-      try {
-        final List<dynamic> list = jsonDecode(userContactsJson);
-        final contacts = list.map((item) => ChatContact.fromMap(item as Map<String, dynamic>)).toList();
-        await SecureKeyStorage.saveContacts(contacts);
-      } catch (_) {
-        await SecureKeyStorage.saveContacts([]);
-      }
+    // Restore contacts list: prioritize Firestore, fallback to local storage
+    List<ChatContact> contacts = [];
+    if (remoteContactsRaw != null && remoteContactsRaw.isNotEmpty) {
+      contacts = remoteContactsRaw
+          .map((item) => ChatContact.fromMap(item as Map<String, dynamic>))
+          .take(5)
+          .toList();
     } else {
-      await SecureKeyStorage.saveContacts([]);
+      final userContactsJson = await _storage.read(key: 'metric_contacts_$u');
+      if (userContactsJson != null && userContactsJson.isNotEmpty) {
+        try {
+          final List<dynamic> list = jsonDecode(userContactsJson);
+          contacts = list.map((item) => ChatContact.fromMap(item as Map<String, dynamic>)).take(5).toList();
+        } catch (_) {}
+      }
     }
+
+    await SecureKeyStorage.saveContacts(contacts);
+    await _storage.write(
+      key: 'metric_contacts_$u',
+      value: jsonEncode(contacts.map((c) => c.toMap()).toList()),
+    );
 
     // Set active device identifiers
     await SecureKeyStorage.saveMyDeviceId(stableUid);
@@ -369,8 +390,58 @@ class AccountAuthService {
     await _storage.write(key: 'metric_auth_current_user', value: u);
     await _storage.write(key: 'metric_auth_is_logged_in', value: 'true');
 
-    // Sync connect code to Firestore for pairing
-    final firestore = FirebaseConfig.firestore;
+    // Restore cryptographic keys deterministically and ratchet keys for all contacts
+    await SignalCryptoService.ensurePrekeyBundle(userAccountSeed: stableUid);
+
+    final cleanMy = connectCode.replaceAll(RegExp(r'[^0-9]'), '');
+    for (final contact in contacts) {
+      final cleanPeer = contact.connectCode.replaceAll(RegExp(r'[^0-9]'), '');
+      if (cleanMy.length == 6 && cleanPeer.length == 6) {
+        final codes = [cleanMy, cleanPeer]..sort();
+        final symKey = await _hkdf.deriveKey(
+          secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
+          nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+          info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+        );
+        final rootKey = (await symKey.extractBytes()).sublist(0, 32);
+
+        final chain1 = await (await _hkdf.deriveKey(
+          secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
+          nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+          info: utf8.encode('CHAIN_${codes[0]}_TO_${codes[1]}'),
+        )).extractBytes();
+
+        final chain2 = await (await _hkdf.deriveKey(
+          secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
+          nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+          info: utf8.encode('CHAIN_${codes[1]}_TO_${codes[0]}'),
+        )).extractBytes();
+
+        final isFirst = cleanMy == codes[0];
+        await SecureKeyStorage.savePeerRatchetKeys(
+          peerUid: contact.uid,
+          rootKeyHex: _bytesToHex(rootKey),
+          sendChainKeyHex: _bytesToHex(isFirst ? chain1.sublist(32, 64) : chain2.sublist(32, 64)),
+          recvChainKeyHex: _bytesToHex(isFirst ? chain2.sublist(32, 64) : chain1.sublist(32, 64)),
+        );
+      }
+      if (contact.publicKeyHex != null && contact.publicKeyHex!.isNotEmpty) {
+        await SecureKeyStorage.savePairedPeer(
+          peerUid: contact.uid,
+          peerPublicKeyHex: contact.publicKeyHex!,
+        );
+      }
+    }
+
+    if (contacts.isNotEmpty) {
+      await SecureKeyStorage.savePairedPeer(
+        peerUid: contacts.first.uid,
+        peerPublicKeyHex: contacts.first.publicKeyHex ?? '',
+      );
+      await SecureKeyStorage.savePeerConnectCode(contacts.first.connectCode);
+    }
+
+    // Sync connect code to Firestore for pairing and publish bundle
     if (firestore != null) {
       try {
         final cleanCode = connectCode.replaceAll(RegExp(r'[^0-9]'), '');
@@ -379,6 +450,7 @@ class AccountAuthService {
           'username': u,
           'connect_code': connectCode,
         }, SetOptions(merge: true));
+        await SignalCryptoService.publishMyConnectCode();
       } catch (_) {}
     }
 

@@ -127,8 +127,67 @@ class SignalCryptoService {
     outputLength: 64, // 32 bytes next root key + 32 bytes chain key
   );
 
-  /// Ensure Identity Keypair, Signing Keypair, Signed Prekey, and One-Time Prekey exist locally
-  static Future<void> ensurePrekeyBundle() async {
+  /// Ensure Identity Keypair, Signing Keypair, Signed Prekey, and One-Time Prekey exist locally.
+  /// If [userAccountSeed] is provided, deterministically derives permanent keypairs for this account.
+  static Future<void> ensurePrekeyBundle({String? userAccountSeed}) async {
+    // If a deterministic account seed is provided, always enforce or derive matching keypairs
+    if (userAccountSeed != null && userAccountSeed.isNotEmpty) {
+      final seedHkdf = await _hkdf.deriveKey(
+        secretKey: SecretKey(utf8.encode(userAccountSeed)),
+        nonce: utf8.encode('METRIC_IDENTITY_KEY_SEED_V2'),
+        info: utf8.encode('X25519_IDENTITY'),
+      );
+      final seedBytes = await seedHkdf.extractBytes();
+      final idKeyPair = await _x25519.newKeyPairFromSeed(seedBytes.sublist(0, 32));
+      final idPrivData = await idKeyPair.extract();
+      final idPub = await idKeyPair.extractPublicKey();
+
+      await SecureKeyStorage.saveIdentityKeyPair(
+        privateKeyHex: _bytesToHex(idPrivData.bytes),
+        publicKeyHex: _bytesToHex(idPub.bytes),
+      );
+
+      final signingKeyPair = await _ed25519.newKeyPairFromSeed(seedBytes.sublist(32, 64));
+      final signPrivData = await signingKeyPair.extract();
+      final signPub = await signingKeyPair.extractPublicKey();
+
+      await SecureKeyStorage.saveSigningKeyPair(
+        privateKeyHex: _bytesToHex(signPrivData.bytes),
+        publicKeyHex: _bytesToHex(signPub.bytes),
+      );
+
+      final spkPair = await _x25519.newKeyPairFromSeed(
+        seedBytes.sublist(0, 32),
+      );
+      final spkPrivData = await spkPair.extract();
+      final spkPub = await spkPair.extractPublicKey();
+
+      final signature = await _ed25519.sign(
+        spkPub.bytes,
+        keyPair: signingKeyPair,
+      );
+
+      await SecureKeyStorage.saveLocalSignedPrekey(
+        privateKeyHex: _bytesToHex(spkPrivData.bytes),
+        publicKeyHex: _bytesToHex(spkPub.bytes),
+        keyId: 1,
+        signatureHex: _bytesToHex(signature.bytes),
+      );
+
+      final opkPair = await _x25519.newKeyPairFromSeed(
+        seedBytes.sublist(16, 48),
+      );
+      final opkPrivData = await opkPair.extract();
+      final opkPub = await opkPair.extractPublicKey();
+
+      await SecureKeyStorage.saveLocalOneTimePrekey(
+        privateKeyHex: _bytesToHex(opkPrivData.bytes),
+        publicKeyHex: _bytesToHex(opkPub.bytes),
+        keyId: 1,
+      );
+      return;
+    }
+
     final existingPrivate = await SecureKeyStorage.getIdentityPrivateKey();
     final existingPublic = await SecureKeyStorage.getIdentityPublicKey();
     final existingSigningPrivate = await SecureKeyStorage.getSigningPrivateKey();
@@ -203,6 +262,33 @@ class SignalCryptoService {
   }
 
   static Future<void> ensureIdentityKeys() => ensurePrekeyBundle();
+
+  /// Resolve a peer's 6-digit connect code from local contacts, storage, or Firestore
+  static Future<String?> resolvePeerConnectCode(String peerUid) async {
+    final contacts = await SecureKeyStorage.getContacts();
+    for (final c in contacts) {
+      if (c.uid == peerUid && c.connectCode.isNotEmpty) {
+        return c.connectCode;
+      }
+    }
+    final peerCode = await SecureKeyStorage.getPeerConnectCode();
+    if (peerCode != null && peerCode.isNotEmpty) {
+      return peerCode;
+    }
+    final firestore = FirebaseConfig.firestore;
+    if (firestore != null && peerUid.isNotEmpty) {
+      try {
+        final doc = await firestore.collection('users').doc(peerUid).get();
+        if (doc.exists) {
+          final code = doc.data()?['connect_code'] as String?;
+          if (code != null && code.isNotEmpty) {
+            return code;
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
 
   /// Retrieve this device's public key bundle for exchange
   static Future<PublicKeyBundle> getLocalPublicKeyBundle() async {
@@ -366,12 +452,9 @@ class SignalCryptoService {
       resolvedPeerUid = const Uuid().v5(Namespace.url.value, 'metric:connect_code:$cleanPeerCode');
     }
 
-    if (currentContacts.any((c) => c.uid == resolvedPeerUid)) {
-      throw Exception('This contact is already in your contacts list.');
-    }
-
-    // 3. Verify peer hasn't exceeded their 5-contact limit
-    if (firestore != null && resolvedPeerUid.isNotEmpty) {
+    // 3. Verify peer hasn't exceeded their 5-contact limit (unless already connected)
+    final isAlreadyContact = currentContacts.any((c) => c.uid == resolvedPeerUid);
+    if (!isAlreadyContact && firestore != null && resolvedPeerUid.isNotEmpty) {
       try {
         final peerDoc = await firestore.collection('users').doc(resolvedPeerUid).get();
         if (peerDoc.exists) {
@@ -446,9 +529,35 @@ class SignalCryptoService {
         final myDoc = await firestore.collection('users').doc(myUid).get();
         final existingRaw = (myDoc.data()?['contacts'] as List<dynamic>? ?? []);
         final contactsList = existingRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-        if (!contactsList.any((c) => c['uid'] == resolvedPeerUid) && contactsList.length < 5) {
+        final idx = contactsList.indexWhere((c) => c['uid'] == resolvedPeerUid);
+        if (idx >= 0) {
+          contactsList[idx] = newContact.toMap();
+        } else if (contactsList.length < 5) {
           contactsList.add(newContact.toMap());
-          await firestore.collection('users').doc(myUid).update({'contacts': contactsList});
+        }
+        await firestore.collection('users').doc(myUid).set({'contacts': contactsList}, SetOptions(merge: true));
+
+        // Mutual sync: Also add my contact to peer's contacts on Firestore
+        final myUsername = await AccountAuthService.getCurrentUsername() ?? 'User';
+        final myPub = await SecureKeyStorage.getIdentityPublicKey() ?? '';
+        final myContactForPeer = ChatContact(
+          uid: myUid,
+          username: myUsername,
+          connectCode: cleanMyCode,
+          publicKeyHex: myPub,
+          addedAt: DateTime.now().millisecondsSinceEpoch,
+        );
+        final peerDoc = await firestore.collection('users').doc(resolvedPeerUid).get();
+        if (peerDoc.exists) {
+          final peerExistingRaw = (peerDoc.data()?['contacts'] as List<dynamic>? ?? []);
+          final peerContactsList = peerExistingRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          final peerIdx = peerContactsList.indexWhere((c) => c['uid'] == myUid);
+          if (peerIdx >= 0) {
+            peerContactsList[peerIdx] = myContactForPeer.toMap();
+          } else if (peerContactsList.length < 5) {
+            peerContactsList.add(myContactForPeer.toMap());
+          }
+          await firestore.collection('users').doc(resolvedPeerUid).set({'contacts': peerContactsList}, SetOptions(merge: true));
         }
       } catch (e) {
         if (kDebugMode) debugPrint('[SignalCrypto] Sync contacts to Firestore error: $e');
@@ -721,7 +830,7 @@ class SignalCryptoService {
     );
   }
 
-  /// Encrypt a message payload using AES-256-GCM + Per-Message Ephemeral Diffie-Hellman Ratchet
+  /// Encrypt a message payload using AES-256-GCM + Symmetrical Channel Secret Ratchet
   static Future<EncryptedMessageEnvelope> encryptPayload({
     required String plaintext,
     required String senderUid,
@@ -732,52 +841,67 @@ class SignalCryptoService {
     final myPrivateHex = await SecureKeyStorage.getIdentityPrivateKey();
     final peerPublicHex = await SecureKeyStorage.getRemoteIdentityPublicKeyForPeer(receiverUid);
 
+    // Resolve connect codes for both participants
+    final myConnectCode = await SecureKeyStorage.getMyConnectCode() ?? '';
+    final peerConnectCode = await resolvePeerConnectCode(receiverUid);
+    final cleanMy = myConnectCode.replaceAll(RegExp(r'[^0-9]'), '');
+    final cleanPeer = (peerConnectCode ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+
+    // 1. Build Symmetric Channel Secret known to both sender and receiver
+    final keyMaterial = <int>[];
+
+    // A. Connect Code Pairing Root
+    if (cleanMy.length == 6 && cleanPeer.length == 6) {
+      final codes = [cleanMy, cleanPeer]..sort();
+      final symKey = await _hkdf.deriveKey(
+        secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
+        nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+        info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+      );
+      keyMaterial.addAll((await symKey.extractBytes()).sublist(0, 32));
+    }
+
+    // B. Diffie-Hellman Shared Secret (symmetric: DH(my_priv, peer_pub) == DH(peer_priv, my_pub))
+    if (myPrivateHex != null && peerPublicHex != null && peerPublicHex.isNotEmpty) {
+      try {
+        final myKeyPair = SimpleKeyPairData(
+          _hexToBytes(myPrivateHex),
+          publicKey: SimplePublicKey(
+            _hexToBytes(await SecureKeyStorage.getIdentityPublicKey() ?? ''),
+            type: KeyPairType.x25519,
+          ),
+          type: KeyPairType.x25519,
+        );
+        final peerIdentityPub = SimplePublicKey(_hexToBytes(peerPublicHex), type: KeyPairType.x25519);
+        final dhIdentity = await (await _x25519.sharedSecretKey(keyPair: myKeyPair, remotePublicKey: peerIdentityPub)).extractBytes();
+        keyMaterial.addAll(dhIdentity);
+      } catch (_) {}
+    }
+
+    // C. Fallback to saved peer root key
+    if (keyMaterial.isEmpty) {
+      final savedRoot = await SecureKeyStorage.getPeerRootKey(receiverUid) ?? await SecureKeyStorage.getRootKey();
+      if (savedRoot != null && savedRoot.isNotEmpty) {
+        keyMaterial.addAll(_hexToBytes(savedRoot));
+      } else {
+        final sortedUids = [senderUid, receiverUid]..sort();
+        keyMaterial.addAll(utf8.encode('METRIC_CHANNEL_${sortedUids[0]}_${sortedUids[1]}'));
+      }
+    }
+
     final ephemeralKeyPair = await _x25519.newKeyPair();
     final ephemeralPublicKey = await ephemeralKeyPair.extractPublicKey();
 
-    SecretKey messageKey;
+    final counter = DateTime.now().microsecondsSinceEpoch % 1000000;
 
-    if (myPrivateHex != null && peerPublicHex != null && peerPublicHex.isNotEmpty) {
-      final myKeyPair = SimpleKeyPairData(
-        _hexToBytes(myPrivateHex),
-        publicKey: SimplePublicKey(
-          _hexToBytes(await SecureKeyStorage.getIdentityPublicKey() ?? ''),
-          type: KeyPairType.x25519,
-        ),
-        type: KeyPairType.x25519,
-      );
-      final peerIdentityPub = SimplePublicKey(_hexToBytes(peerPublicHex), type: KeyPairType.x25519);
-
-      final dhIdentity = await (await _x25519.sharedSecretKey(keyPair: myKeyPair, remotePublicKey: peerIdentityPub)).extractBytes();
-      final dhEphemeral = await (await _x25519.sharedSecretKey(keyPair: ephemeralKeyPair, remotePublicKey: peerIdentityPub)).extractBytes();
-
-      final combined = [...dhIdentity, ...dhEphemeral];
-      final derived = await _hkdf.deriveKey(
-        secretKey: SecretKey(combined),
-        nonce: utf8.encode('METRIC_SIGNAL_E2E_V1'),
-        info: utf8.encode('METRIC_MSG_ENCRYPT'),
-      );
-      final derivedBytes = await derived.extractBytes();
-      messageKey = SecretKey(derivedBytes.sublist(0, 32));
-    } else {
-      var sendChainHex = await SecureKeyStorage.getSendChainKey();
-      sendChainHex ??= _bytesToHex(List<int>.generate(32, (i) => (i * 7 + 13) % 256));
-      final currentChainKey = _hexToBytes(sendChainHex);
-
-      final kdfOutput = await _hkdf.deriveKey(
-        secretKey: SecretKey(currentChainKey),
-        nonce: utf8.encode('RAT_STEP'),
-        info: utf8.encode('SEND_MSG_KEY'),
-      );
-      final kdfBytes = await kdfOutput.extractBytes();
-      final nextChainKey = kdfBytes.sublist(0, 32);
-      messageKey = SecretKey(kdfBytes.sublist(32, 64));
-      await SecureKeyStorage.saveRatchetKeys(
-        rootKeyHex: await SecureKeyStorage.getRootKey() ?? '',
-        sendChainKeyHex: _bytesToHex(nextChainKey),
-        recvChainKeyHex: await SecureKeyStorage.getRecvChainKey() ?? '',
-      );
-    }
+    // Derive per-message key from symmetrical channel root + message counter
+    final derivedSecret = await _hkdf.deriveKey(
+      secretKey: SecretKey(keyMaterial),
+      nonce: utf8.encode('METRIC_SIGNAL_E2E_V2'),
+      info: utf8.encode('MSG_$counter'),
+    );
+    final messageKeyBytes = (await derivedSecret.extractBytes()).sublist(0, 32);
+    final messageKey = SecretKey(messageKeyBytes);
 
     final plaintextBytes = utf8.encode(plaintext);
     final secretBox = await _aesGcm.encrypt(
@@ -794,7 +918,7 @@ class SignalCryptoService {
       senderUid: senderUid,
       receiverUid: receiverUid,
       ephemeralPublicKeyHex: _bytesToHex(ephemeralPublicKey.bytes),
-      counter: DateTime.now().microsecondsSinceEpoch % 1000000,
+      counter: counter,
       ivHex: _bytesToHex(secretBox.nonce),
       ciphertextHex: _bytesToHex(secretBox.cipherText),
       macHex: _bytesToHex(secretBox.mac.bytes),
@@ -803,7 +927,7 @@ class SignalCryptoService {
     );
   }
 
-  /// Decrypt an incoming ciphertext envelope
+  /// Decrypt an incoming ciphertext envelope (supports both sender and receiver)
   static Future<String> decryptPayload(EncryptedMessageEnvelope envelope) async {
     final secretBox = SecretBox(
       _hexToBytes(envelope.ciphertextHex),
@@ -811,15 +935,102 @@ class SignalCryptoService {
       mac: Mac(_hexToBytes(envelope.macHex)),
     );
 
-    // Strategy 1: Ephemeral Diffie-Hellman Key Derivation (Signal per-message forward secrecy)
-    try {
-      await ensurePrekeyBundle();
-      final myPrivateHex = await SecureKeyStorage.getIdentityPrivateKey();
-      final peerPublicHex = await SecureKeyStorage.getRemoteIdentityPublicKeyForPeer(envelope.senderUid);
+    await ensurePrekeyBundle();
+    final myUid = await SecureKeyStorage.getMyDeviceId() ?? '';
+    final isSentByMe = (envelope.senderUid == myUid);
+    final peerUid = isSentByMe ? envelope.receiverUid : envelope.senderUid;
 
-      if (myPrivateHex != null &&
-          peerPublicHex != null &&
-          envelope.ephemeralPublicKeyHex.isNotEmpty) {
+    final myPrivateHex = await SecureKeyStorage.getIdentityPrivateKey();
+    final peerPublicHex = await SecureKeyStorage.getRemoteIdentityPublicKeyForPeer(peerUid);
+    final myConnectCode = await SecureKeyStorage.getMyConnectCode() ?? '';
+    final peerConnectCode = await resolvePeerConnectCode(peerUid);
+    final cleanMy = myConnectCode.replaceAll(RegExp(r'[^0-9]'), '');
+    final cleanPeer = (peerConnectCode ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+
+    // Strategy 1: Symmetrical Per-Message Key Derivation (V2 - works for both sender & receiver)
+    try {
+      final keyMaterial = <int>[];
+
+      if (cleanMy.length == 6 && cleanPeer.length == 6) {
+        final codes = [cleanMy, cleanPeer]..sort();
+        final symKey = await _hkdf.deriveKey(
+          secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
+          nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+          info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+        );
+        keyMaterial.addAll((await symKey.extractBytes()).sublist(0, 32));
+      }
+
+      if (myPrivateHex != null && peerPublicHex != null && peerPublicHex.isNotEmpty) {
+        try {
+          final myKeyPair = SimpleKeyPairData(
+            _hexToBytes(myPrivateHex),
+            publicKey: SimplePublicKey(
+              _hexToBytes(await SecureKeyStorage.getIdentityPublicKey() ?? ''),
+              type: KeyPairType.x25519,
+            ),
+            type: KeyPairType.x25519,
+          );
+          final peerIdentityPub = SimplePublicKey(_hexToBytes(peerPublicHex), type: KeyPairType.x25519);
+          final dhIdentity = await (await _x25519.sharedSecretKey(keyPair: myKeyPair, remotePublicKey: peerIdentityPub)).extractBytes();
+          keyMaterial.addAll(dhIdentity);
+        } catch (_) {}
+      }
+
+      if (keyMaterial.isEmpty) {
+        final savedRoot = await SecureKeyStorage.getPeerRootKey(peerUid) ?? await SecureKeyStorage.getRootKey();
+        if (savedRoot != null && savedRoot.isNotEmpty) {
+          keyMaterial.addAll(_hexToBytes(savedRoot));
+        } else {
+          final sortedUids = [envelope.senderUid, envelope.receiverUid]..sort();
+          keyMaterial.addAll(utf8.encode('METRIC_CHANNEL_${sortedUids[0]}_${sortedUids[1]}'));
+        }
+      }
+
+      final derivedSecret = await _hkdf.deriveKey(
+        secretKey: SecretKey(keyMaterial),
+        nonce: utf8.encode('METRIC_SIGNAL_E2E_V2'),
+        info: utf8.encode('MSG_${envelope.counter}'),
+      );
+      final messageKey = SecretKey((await derivedSecret.extractBytes()).sublist(0, 32));
+
+      final decryptedBytes = await _aesGcm.decrypt(
+        secretBox,
+        secretKey: messageKey,
+      );
+      return utf8.decode(decryptedBytes);
+    } catch (_) {}
+
+    // Strategy 2: Direct connect-code root without counter (with and without AAD)
+    if (cleanMy.length == 6 && cleanPeer.length == 6) {
+      try {
+        final codes = [cleanMy, cleanPeer]..sort();
+        final symKey = await _hkdf.deriveKey(
+          secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
+          nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
+          info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+        );
+        final symBytes = (await symKey.extractBytes()).sublist(0, 32);
+        for (final aadString in [
+          '',
+          '${envelope.senderUid}:${envelope.receiverUid}',
+          '${envelope.senderUid}:',
+        ]) {
+          try {
+            final decryptedBytes = await _aesGcm.decrypt(
+              secretBox,
+              secretKey: SecretKey(symBytes),
+              aad: aadString.isNotEmpty ? utf8.encode(aadString) : const <int>[],
+            );
+            return utf8.decode(decryptedBytes);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    // Strategy 3: Ephemeral Diffie-Hellman Key Derivation (V1 - for messages sent from peer)
+    if (!isSentByMe && myPrivateHex != null && peerPublicHex != null && envelope.ephemeralPublicKeyHex.isNotEmpty) {
+      try {
         final myKeyPair = SimpleKeyPairData(
           _hexToBytes(myPrivateHex),
           publicKey: SimplePublicKey(
@@ -844,79 +1055,37 @@ class SignalCryptoService {
         final derivedBytes = await derived.extractBytes();
         final messageKey = SecretKey(derivedBytes.sublist(0, 32));
 
-        // Try decrypting with clean payload
         final decryptedBytes = await _aesGcm.decrypt(
           secretBox,
           secretKey: messageKey,
         );
         return utf8.decode(decryptedBytes);
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[SignalCrypto] Ephemeral DH decrypt attempt notice: $e');
-      }
+      } catch (_) {}
     }
 
-    // Strategy 2: Legacy / Chain Key Ratchet with AAD fallbacks
+    // Strategy 4: Legacy Chain Key Ratchet with AAD fallbacks
     try {
-      var recvChainHex = await SecureKeyStorage.getRecvChainKey();
-      recvChainHex ??= _bytesToHex(List<int>.generate(32, (i) => (i * 7 + 13) % 256));
-      final currentChainKey = _hexToBytes(recvChainHex);
-
-      final kdfOutput = await _hkdf.deriveKey(
-        secretKey: SecretKey(currentChainKey),
-        nonce: utf8.encode('RAT_STEP'),
-        info: utf8.encode('SEND_MSG_KEY'),
-      );
-      final kdfBytes = await kdfOutput.extractBytes();
-      final nextChainKey = kdfBytes.sublist(0, 32);
-      final messageKeyBytes = kdfBytes.sublist(32, 64);
-      final secretKey = SecretKey(messageKeyBytes);
-
-      for (final aadString in [
-        '${envelope.senderUid}:${envelope.receiverUid}',
-        '${envelope.senderUid}:',
-        '',
-      ]) {
-        try {
-          final decryptedBytes = await _aesGcm.decrypt(
-            secretBox,
-            secretKey: secretKey,
-            aad: aadString.isNotEmpty ? utf8.encode(aadString) : const <int>[],
-          );
-          await SecureKeyStorage.saveRatchetKeys(
-            rootKeyHex: await SecureKeyStorage.getRootKey() ?? '',
-            sendChainKeyHex: await SecureKeyStorage.getSendChainKey() ?? '',
-            recvChainKeyHex: _bytesToHex(nextChainKey),
-          );
-          return utf8.decode(decryptedBytes);
-        } catch (_) {}
-      }
-    } catch (_) {}
-
-    // Strategy 3: Symmetrical Key derived from pairing connect codes
-    try {
-      final myCode = await SecureKeyStorage.getMyConnectCode() ?? '';
-      final peerCode = await SecureKeyStorage.getPeerConnectCode() ?? '';
-      final cleanMy = myCode.replaceAll(RegExp(r'[^0-9]'), '');
-      final cleanPeer = peerCode.replaceAll(RegExp(r'[^0-9]'), '');
-      if (cleanMy.length == 6 && cleanPeer.length == 6) {
-        final codes = [cleanMy, cleanPeer]..sort();
-        final symKey = await _hkdf.deriveKey(
-          secretKey: SecretKey(utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}')),
-          nonce: utf8.encode('METRIC_SIGNAL_INIT_V2'),
-          info: utf8.encode('ROOT_${codes[0]}_${codes[1]}'),
+      var recvChainHex = await SecureKeyStorage.getPeerRecvChainKey(peerUid) ?? await SecureKeyStorage.getRecvChainKey();
+      if (recvChainHex != null) {
+        final currentChainKey = _hexToBytes(recvChainHex);
+        final kdfOutput = await _hkdf.deriveKey(
+          secretKey: SecretKey(currentChainKey),
+          nonce: utf8.encode('RAT_STEP'),
+          info: utf8.encode('SEND_MSG_KEY'),
         );
-        final symBytes = (await symKey.extractBytes()).sublist(0, 32);
+        final kdfBytes = await kdfOutput.extractBytes();
+        final messageKeyBytes = kdfBytes.sublist(32, 64);
+        final secretKey = SecretKey(messageKeyBytes);
+
         for (final aadString in [
+          '',
           '${envelope.senderUid}:${envelope.receiverUid}',
           '${envelope.senderUid}:',
-          '',
         ]) {
           try {
             final decryptedBytes = await _aesGcm.decrypt(
               secretBox,
-              secretKey: SecretKey(symBytes),
+              secretKey: secretKey,
               aad: aadString.isNotEmpty ? utf8.encode(aadString) : const <int>[],
             );
             return utf8.decode(decryptedBytes);

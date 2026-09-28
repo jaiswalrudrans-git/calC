@@ -174,8 +174,10 @@ class ChatNotifier extends Notifier<ChatState> {
             final timestamp = (data['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
 
             if (change.type == DocumentChangeType.added) {
-              final exists = state.messages.any((m) => m.id == msgId);
-              if (!exists) {
+              final existingIndex = state.messages.indexWhere((m) => m.id == msgId);
+              final isEncryptedPlaceholder = existingIndex >= 0 && state.messages[existingIndex].text.contains('[Encrypted');
+
+              if (existingIndex < 0 || isEncryptedPlaceholder) {
                 final isMe = senderUid == myUid;
                 String decryptedText = '';
 
