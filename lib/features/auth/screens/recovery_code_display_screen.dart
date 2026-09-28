@@ -61,7 +61,7 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
     return PopScope(
       canPop: false, // Prevent accidental back-navigation without confirmation
       child: Scaffold(
-        backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+        backgroundColor: isDark ? MetricColors.background : AppColors.backgroundLight,
         appBar: AppBar(
           automaticallyImplyLeading: false,
           title: Text(
@@ -81,17 +81,17 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                   width: 80,
                   height: 80,
                   decoration: BoxDecoration(
-                    color: AppColors.warningAmber.withValues(alpha: 0.14),
+                    color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: AppColors.warningAmber.withValues(alpha: 0.3),
-                      width: 2,
+                      color: isDark ? MetricGlass.borderHighlight : Colors.grey.shade300,
+                      width: 1.0,
                     ),
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.key_rounded,
-                    size: 40,
-                    color: AppColors.warningAmber,
+                    size: 38,
+                    color: isDark ? MetricColors.textPrimary : Colors.black87,
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -103,7 +103,7 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                     fontSize: 24,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -116,7 +116,7 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                   style: TextStyle(
                     fontSize: 14,
                     height: 1.45,
-                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                    color: isDark ? MetricColors.textSecondary : AppColors.textSecondaryLight,
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -127,11 +127,11 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: AppColors.alertRed.withValues(alpha: 0.08),
+                    color: isDark ? const Color(0x1DEF4444) : const Color(0xFFFFF5F5),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: AppColors.alertRed.withValues(alpha: 0.35),
-                      width: 1.5,
+                      color: const Color(0x40EF4444),
+                      width: 1.0,
                     ),
                   ),
                   child: Column(
@@ -176,29 +176,22 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
                   decoration: BoxDecoration(
-                    color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                    color: isDark ? MetricGlass.level1 : Colors.white,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-                      width: 1.5,
+                      color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+                      width: 1.0,
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
-                        blurRadius: 16,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
                   ),
                   child: Column(
                     children: [
-                      const Text(
+                      Text(
                         'RECOVERY CODE',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.5,
-                          color: AppColors.textMutedLight,
+                          color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -210,7 +203,7 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                           fontWeight: FontWeight.w900,
                           letterSpacing: 3.0,
                           fontFamily: 'monospace',
-                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                          color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                         ),
                       ),
                       const SizedBox(height: 18),
@@ -219,20 +212,25 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                         icon: Icon(
                           _copied ? Icons.check_rounded : Icons.copy_rounded,
                           size: 16,
-                          color: _copied ? AppColors.secureGreen : AppColors.primary,
+                          color: _copied
+                              ? AppColors.secureGreen
+                              : (isDark ? MetricColors.textPrimary : Colors.black87),
                         ),
                         label: Text(
                           _copied ? 'Copied to Clipboard' : 'Copy Recovery Code',
                           style: TextStyle(
-                            color: _copied ? AppColors.secureGreen : AppColors.primary,
+                            color: _copied
+                                ? AppColors.secureGreen
+                                : (isDark ? MetricColors.textPrimary : Colors.black87),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                         style: OutlinedButton.styleFrom(
+                          backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                           side: BorderSide(
                             color: _copied
                                 ? AppColors.secureGreen
-                                : AppColors.primary.withValues(alpha: 0.5),
+                                : (isDark ? MetricGlass.border : Colors.grey.shade300),
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -249,13 +247,13 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: isDark ? AppColors.surfaceDark.withValues(alpha: 0.5) : Colors.white,
+                    color: isDark ? MetricGlass.level1 : Colors.white,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: _hasSavedConfirmation
-                          ? AppColors.primary
-                          : (isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight),
-                      width: 1.2,
+                          ? (isDark ? Colors.white : Colors.black)
+                          : (isDark ? MetricGlass.border : AppColors.cardBorderLight),
+                      width: 1.0,
                     ),
                   ),
                   child: Row(
@@ -263,7 +261,8 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                     children: [
                       Checkbox(
                         value: _hasSavedConfirmation,
-                        activeColor: AppColors.primary,
+                        activeColor: isDark ? Colors.white : Colors.black,
+                        checkColor: isDark ? Colors.black : Colors.white,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
                         onChanged: (val) {
                           HapticFeedback.selectionClick();
@@ -290,7 +289,7 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                                 height: 1.4,
                                 fontWeight: FontWeight.w600,
                                 color: isDark
-                                    ? AppColors.textPrimaryDark
+                                    ? MetricColors.textPrimary
                                     : AppColors.textPrimaryLight,
                               ),
                             ),
@@ -309,12 +308,13 @@ class _RecoveryCodeDisplayScreenState extends State<RecoveryCodeDisplayScreen> {
                   child: FilledButton(
                     onPressed: _hasSavedConfirmation ? _onProceed : null,
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                      backgroundColor: isDark ? Colors.white : Colors.black,
+                      foregroundColor: isDark ? Colors.black : Colors.white,
                       disabledBackgroundColor: isDark ? Colors.white12 : Colors.black12,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      elevation: _hasSavedConfirmation ? 2 : 0,
+                      elevation: 0,
                     ),
                     child: Text(
                       _hasSavedConfirmation ? 'I\'ve Saved It — Proceed' : 'Confirm Saved to Proceed',

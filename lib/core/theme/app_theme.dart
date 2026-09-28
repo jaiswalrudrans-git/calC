@@ -7,11 +7,11 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
-      primaryColor: AppColors.primary,
+      primaryColor: Colors.black,
       scaffoldBackgroundColor: AppColors.backgroundLight,
       colorScheme: const ColorScheme.light(
-        primary: AppColors.primary,
-        secondary: AppColors.accent,
+        primary: Colors.black,
+        secondary: Color(0xFF555555),
         surface: AppColors.surfaceLight,
         error: AppColors.alertRed,
         onPrimary: Colors.white,
@@ -25,9 +25,9 @@ class AppTheme {
         iconTheme: IconThemeData(color: AppColors.textPrimaryLight),
         titleTextStyle: TextStyle(
           color: AppColors.textPrimaryLight,
-          fontSize: 28,
+          fontSize: 22,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.5,
+          letterSpacing: -0.3,
         ),
       ),
       cardTheme: CardThemeData(
@@ -35,19 +35,18 @@ class AppTheme {
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: AppColors.cardBorderLight, width: 1.2),
+          side: const BorderSide(color: AppColors.cardBorderLight, width: 1.0),
         ),
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
         backgroundColor: AppColors.surfaceLight,
-        selectedItemColor: AppColors.primary,
+        selectedItemColor: Colors.black,
         unselectedItemColor: AppColors.textMutedLight,
         selectedLabelStyle: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         unselectedLabelStyle: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
         type: BottomNavigationBarType.fixed,
-        elevation: 8,
+        elevation: 0,
       ),
-      fontFamily: null, // Uses SF Pro / Roboto system default
     );
   }
 
@@ -55,11 +54,11 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      primaryColor: AppColors.primaryLight,
-      scaffoldBackgroundColor: AppColors.backgroundDark,
+      primaryColor: Colors.white,
+      scaffoldBackgroundColor: AppColors.backgroundDark, // True AMOLED Black #000000
       colorScheme: const ColorScheme.dark(
-        primary: AppColors.primaryLight,
-        secondary: AppColors.accent,
+        primary: Colors.white,
+        secondary: AppColors.textSecondaryDark,
         surface: AppColors.surfaceDark,
         error: AppColors.alertRed,
         onPrimary: Colors.black,
@@ -73,9 +72,9 @@ class AppTheme {
         iconTheme: IconThemeData(color: AppColors.textPrimaryDark),
         titleTextStyle: TextStyle(
           color: AppColors.textPrimaryDark,
-          fontSize: 28,
+          fontSize: 22,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.5,
+          letterSpacing: -0.3,
         ),
       ),
       cardTheme: CardThemeData(
@@ -83,17 +82,37 @@ class AppTheme {
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: AppColors.cardBorderDark, width: 1.2),
+          side: const BorderSide(color: AppColors.cardBorderDark, width: 1.0),
+        ),
+      ),
+      dividerTheme: const DividerThemeData(
+        color: Color(0x0FFFFFFF), // rgba(255,255,255, 0.06)
+        thickness: 1.0,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: const Color(0xFF0F0F0F),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(22),
+          side: const BorderSide(color: AppColors.cardBorderDark, width: 1.0),
+        ),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Color(0xFF0D0D0D),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          side: BorderSide(color: AppColors.cardBorderDark, width: 1.0),
         ),
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-        backgroundColor: AppColors.surfaceDark,
-        selectedItemColor: AppColors.primaryLight,
+        backgroundColor: AppColors.backgroundDark, // True AMOLED Black #000000
+        selectedItemColor: Colors.white,
         unselectedItemColor: AppColors.textMutedDark,
         selectedLabelStyle: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         unselectedLabelStyle: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
         type: BottomNavigationBarType.fixed,
-        elevation: 8,
+        elevation: 0,
       ),
     );
   }

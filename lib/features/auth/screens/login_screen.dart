@@ -107,7 +107,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+      backgroundColor: isDark ? MetricColors.background : AppColors.backgroundLight,
       appBar: AppBar(
         title: const Text('Metric Login'),
       ),
@@ -124,13 +124,17 @@ class _LoginScreenState extends State<LoginScreen> {
                   width: 76,
                   height: 76,
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.12),
+                    color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                     shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isDark ? MetricGlass.borderHighlight : Colors.grey.shade300,
+                      width: 1.0,
+                    ),
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.lock_rounded,
-                    size: 38,
-                    color: AppColors.primary,
+                    size: 36,
+                    color: isDark ? MetricColors.textPrimary : Colors.black87,
                   ),
                 ),
                 const SizedBox(height: 18),
@@ -140,7 +144,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     fontSize: 24,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -149,7 +153,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 13.5,
-                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                    color: isDark ? MetricColors.textSecondary : AppColors.textSecondaryLight,
                   ),
                 ),
                 const SizedBox(height: 28),
@@ -161,9 +165,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     padding: const EdgeInsets.all(12),
                     margin: const EdgeInsets.only(bottom: 18),
                     decoration: BoxDecoration(
-                      color: AppColors.alertRed.withValues(alpha: 0.1),
+                      color: const Color(0x1DEF4444),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.alertRed.withValues(alpha: 0.3)),
+                      border: Border.all(color: const Color(0x40EF4444)),
                     ),
                     child: Row(
                       children: [
@@ -192,7 +196,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 1.0,
-                      color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                      color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
                     ),
                   ),
                 ),
@@ -202,25 +206,39 @@ class _LoginScreenState extends State<LoginScreen> {
                   autocorrect: false,
                   enableSuggestions: false,
                   style: TextStyle(
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                     fontSize: 15,
                   ),
                   decoration: InputDecoration(
                     hintText: 'Enter your username',
-                    prefixIcon: const Icon(Icons.person_outline_rounded, size: 20),
+                    hintStyle: TextStyle(
+                      color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
+                      fontSize: 14,
+                    ),
+                    prefixIcon: Icon(
+                      Icons.person_outline_rounded,
+                      size: 20,
+                      color: isDark ? MetricColors.textMuted : Colors.black54,
+                    ),
                     filled: true,
-                    fillColor: isDark ? AppColors.surfaceDark : Colors.white,
+                    fillColor: isDark ? MetricGlass.level1 : Colors.white,
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide: BorderSide(
-                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                        color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
                       ),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide: BorderSide(
-                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                        color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(
+                        color: isDark ? MetricGlass.borderHighlight : Colors.grey.shade400,
                       ),
                     ),
                   ),
@@ -239,7 +257,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 1.0,
-                      color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                      color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
                     ),
                   ),
                 ),
@@ -248,32 +266,47 @@ class _LoginScreenState extends State<LoginScreen> {
                   controller: _passwordController,
                   obscureText: _obscurePassword,
                   style: TextStyle(
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                     fontSize: 15,
                   ),
                   decoration: InputDecoration(
                     hintText: 'Enter your password',
-                    prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
+                    hintStyle: TextStyle(
+                      color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
+                      fontSize: 14,
+                    ),
+                    prefixIcon: Icon(
+                      Icons.lock_outline_rounded,
+                      size: 20,
+                      color: isDark ? MetricColors.textMuted : Colors.black54,
+                    ),
                     suffixIcon: IconButton(
                       icon: Icon(
                         _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                         size: 20,
+                        color: isDark ? MetricColors.textMuted : Colors.black54,
                       ),
                       onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                     ),
                     filled: true,
-                    fillColor: isDark ? AppColors.surfaceDark : Colors.white,
+                    fillColor: isDark ? MetricGlass.level1 : Colors.white,
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide: BorderSide(
-                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                        color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
                       ),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide: BorderSide(
-                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                        color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(
+                        color: isDark ? MetricGlass.borderHighlight : Colors.grey.shade400,
                       ),
                     ),
                   ),
@@ -290,12 +323,12 @@ class _LoginScreenState extends State<LoginScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                       visualDensity: VisualDensity.compact,
                     ),
-                    child: const Text(
+                    child: Text(
                       'Forgot password?',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.primary,
+                        color: isDark ? MetricColors.textSecondary : Colors.black87,
                       ),
                     ),
                   ),
@@ -309,16 +342,21 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: FilledButton(
                     onPressed: _isLoading ? null : _handleLogin,
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                      backgroundColor: isDark ? Colors.white : Colors.black,
+                      foregroundColor: isDark ? Colors.black : Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
                       ),
+                      elevation: 0,
                     ),
                     child: _isLoading
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 22,
                             height: 22,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.2),
+                            child: CircularProgressIndicator(
+                              color: isDark ? Colors.black : Colors.white,
+                              strokeWidth: 2.2,
+                            ),
                           )
                         : const Text(
                             'Sign In',
@@ -336,17 +374,17 @@ class _LoginScreenState extends State<LoginScreen> {
                       'Don\'t have an account?',
                       style: TextStyle(
                         fontSize: 13,
-                        color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                        color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
                       ),
                     ),
                     TextButton(
                       onPressed: _openRegister,
-                      child: const Text(
+                      child: Text(
                         'Create Account',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
+                          color: isDark ? MetricColors.textPrimary : Colors.black,
                         ),
                       ),
                     ),

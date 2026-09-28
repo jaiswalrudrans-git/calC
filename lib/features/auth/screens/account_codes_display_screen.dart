@@ -84,7 +84,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
     return PopScope(
       canPop: false, // Must acknowledge recovery code before proceeding
       child: Scaffold(
-        backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+        backgroundColor: isDark ? MetricColors.background : AppColors.backgroundLight,
         appBar: AppBar(
           automaticallyImplyLeading: false,
           title: const Text('Account Credentials'),
@@ -102,7 +102,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                     fontSize: 22,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -112,7 +112,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 13.5,
-                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                    color: isDark ? MetricColors.textSecondary : AppColors.textSecondaryLight,
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -124,11 +124,11 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF131D38) : const Color(0xFFEFF6FF),
+                    color: isDark ? MetricGlass.level1 : const Color(0xFFF8FAFC),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.4),
-                      width: 1.5,
+                      color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                      width: 1.0,
                     ),
                   ),
                   child: Column(
@@ -139,13 +139,17 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: AppColors.primary.withValues(alpha: 0.15),
+                              color: isDark ? MetricGlass.level2 : Colors.grey.shade200,
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(Icons.people_alt_rounded, color: AppColors.primary, size: 20),
+                            child: Icon(
+                              Icons.people_alt_rounded,
+                              color: isDark ? MetricColors.textPrimary : Colors.black87,
+                              size: 20,
+                            ),
                           ),
                           const SizedBox(width: 10),
-                          const Expanded(
+                          Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -155,12 +159,15 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                                     fontSize: 11,
                                     fontWeight: FontWeight.w800,
                                     letterSpacing: 1.2,
-                                    color: AppColors.primary,
+                                    color: isDark ? MetricColors.textPrimary : Colors.black87,
                                   ),
                                 ),
                                 Text(
                                   'Permanent • Always visible in Settings',
-                                  style: TextStyle(fontSize: 11, color: AppColors.textMutedLight),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
+                                  ),
                                 ),
                               ],
                             ),
@@ -176,7 +183,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                             fontWeight: FontWeight.w900,
                             letterSpacing: 4.0,
                             fontFamily: 'monospace',
-                            color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                            color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                           ),
                         ),
                       ),
@@ -186,19 +193,35 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                         style: TextStyle(
                           fontSize: 12.5,
                           height: 1.4,
-                          color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                          color: isDark ? MetricColors.textSecondary : AppColors.textSecondaryLight,
                         ),
                       ),
                       const SizedBox(height: 12),
                       Align(
                         alignment: Alignment.centerRight,
-                        child: FilledButton.tonalIcon(
+                        child: OutlinedButton.icon(
                           onPressed: _copyConnectCode,
                           icon: Icon(
                             _copiedConnectCode ? Icons.check_rounded : Icons.copy_rounded,
                             size: 15,
+                            color: isDark ? MetricColors.textPrimary : Colors.black87,
                           ),
-                          label: Text(_copiedConnectCode ? 'Copied' : 'Copy Connect Code'),
+                          label: Text(
+                            _copiedConnectCode ? 'Copied' : 'Copy Connect Code',
+                            style: TextStyle(
+                              color: isDark ? MetricColors.textPrimary : Colors.black87,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade100,
+                            side: BorderSide(
+                              color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
                         ),
                       ),
                     ],
@@ -213,11 +236,11 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF261919) : const Color(0xFFFFF5F5),
+                    color: isDark ? const Color(0x1DEF4444) : const Color(0xFFFFF5F5),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: AppColors.alertRed.withValues(alpha: 0.45),
-                      width: 1.5,
+                      color: const Color(0x40EF4444),
+                      width: 1.0,
                     ),
                   ),
                   child: Column(
@@ -227,8 +250,8 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                         children: [
                           Container(
                             padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: AppColors.alertRed.withValues(alpha: 0.15),
+                            decoration: const BoxDecoration(
+                              color: Color(0x26EF4444),
                               shape: BoxShape.circle,
                             ),
                             child: const Icon(Icons.vpn_key_rounded, color: AppColors.alertRed, size: 20),
@@ -269,7 +292,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                             fontWeight: FontWeight.w900,
                             letterSpacing: 2.5,
                             fontFamily: 'monospace',
-                            color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                            color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                           ),
                         ),
                       ),
@@ -277,7 +300,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: AppColors.alertRed.withValues(alpha: 0.08),
+                          color: isDark ? const Color(0x12EF4444) : AppColors.alertRed.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(
@@ -293,7 +316,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                       const SizedBox(height: 12),
                       Align(
                         alignment: Alignment.centerRight,
-                        child: FilledButton.tonalIcon(
+                        child: OutlinedButton.icon(
                           onPressed: _copyRecoveryCode,
                           icon: Icon(
                             _copiedRecoveryCode ? Icons.check_rounded : Icons.copy_rounded,
@@ -302,7 +325,13 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                           ),
                           label: Text(
                             _copiedRecoveryCode ? 'Copied' : 'Copy Recovery Code',
-                            style: const TextStyle(color: AppColors.alertRed),
+                            style: const TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.w600),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Color(0x40EF4444)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                           ),
                         ),
                       ),
@@ -315,13 +344,13 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: isDark ? AppColors.surfaceDark : Colors.white,
+                    color: isDark ? MetricGlass.level1 : Colors.white,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: _hasSavedRecoveryCode
-                          ? AppColors.primary
-                          : (isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight),
-                      width: 1.2,
+                          ? (isDark ? Colors.white : Colors.black)
+                          : (isDark ? MetricGlass.border : AppColors.cardBorderLight),
+                      width: 1.0,
                     ),
                   ),
                   child: Row(
@@ -329,7 +358,8 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                     children: [
                       Checkbox(
                         value: _hasSavedRecoveryCode,
-                        activeColor: AppColors.primary,
+                        activeColor: isDark ? Colors.white : Colors.black,
+                        checkColor: isDark ? Colors.black : Colors.white,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
                         onChanged: (val) {
                           HapticFeedback.selectionClick();
@@ -351,7 +381,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                                 fontSize: 13,
                                 height: 1.4,
                                 fontWeight: FontWeight.w600,
-                                color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                                color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                               ),
                             ),
                           ),
@@ -369,11 +399,13 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
                   child: FilledButton(
                     onPressed: _hasSavedRecoveryCode ? _onProceed : null,
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                      backgroundColor: isDark ? Colors.white : Colors.black,
+                      foregroundColor: isDark ? Colors.black : Colors.white,
                       disabledBackgroundColor: isDark ? Colors.white12 : Colors.black12,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
+                      elevation: 0,
                     ),
                     child: Text(
                       _hasSavedRecoveryCode ? 'Proceed to Metric →' : 'Confirm Saved to Proceed',

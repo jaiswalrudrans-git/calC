@@ -315,13 +315,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         : chatState.messages.where((m) => m.text.toLowerCase().contains(_searchQuery)).toList();
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0F111A) : const Color(0xFFF6F8FC),
+      backgroundColor: isDark ? MetricColors.background : const Color(0xFFF6F8FC),
       appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF141724) : Colors.white,
-        elevation: 0.5,
+        backgroundColor: isDark ? MetricColors.background : Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         titleSpacing: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+          icon: Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: isDark ? MetricColors.textPrimary : Colors.black87),
           onPressed: () => Navigator.pop(context),
         ),
         title: _isSearching
@@ -344,11 +345,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 children: [
                   CircleAvatar(
                     radius: 19,
-                    backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                    backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade200,
                     child: Text(
                       displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-                      style: const TextStyle(
-                        color: AppColors.primary,
+                      style: TextStyle(
+                        color: isDark ? MetricColors.textPrimary : Colors.black87,
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
                       ),
@@ -475,19 +476,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             // E2EE Notice banner
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: isDark ? const Color(0xFF131722) : const Color(0xFFEDF2F7),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+              color: isDark ? MetricGlass.level1 : const Color(0xFFEDF2F7),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.lock_rounded, size: 13, color: AppColors.primary),
+                  Icon(Icons.lock_rounded, size: 12, color: isDark ? MetricColors.textMuted : AppColors.textSecondaryLight),
                   const SizedBox(width: 6),
                   Text(
                     'Messages are end-to-end encrypted with Signal Double Ratchet',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
-                      color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                      color: isDark ? MetricColors.textMuted : AppColors.textSecondaryLight,
                     ),
                   ),
                 ],
@@ -572,24 +573,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
               decoration: BoxDecoration(
                 color: isMe
-                    ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFE7FFDB))
-                    : (isDark ? const Color(0xFF1F2C34) : Colors.white),
+                    ? (isDark ? MetricChatColors.sentBubble : const Color(0xFFE5E7EB))
+                    : (isDark ? MetricChatColors.receivedBubble : Colors.white),
                 borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isMe ? 16 : 3),
-                  bottomRight: Radius.circular(isMe ? 3 : 16),
+                  topLeft: const Radius.circular(18),
+                  topRight: const Radius.circular(18),
+                  bottomLeft: Radius.circular(isMe ? 18 : 4),
+                  bottomRight: Radius.circular(isMe ? 4 : 18),
                 ),
-                border: isHighlighted
-                    ? Border.all(color: AppColors.primary, width: 2)
-                    : null,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 3,
-                    offset: const Offset(0, 1),
-                  ),
-                ],
+                border: Border.all(
+                  color: isHighlighted
+                      ? MetricChatColors.receivedText
+                      : (isDark
+                          ? (isMe ? MetricChatColors.sentBorder : MetricChatColors.receivedBorder)
+                          : Colors.black.withValues(alpha: 0.08)),
+                  width: isHighlighted ? 1.5 : 1.0,
+                ),
               ),
               child: Column(
                 crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -600,8 +599,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       fontSize: 15,
                       height: 1.35,
                       color: isMe
-                          ? (isDark ? Colors.white : const Color(0xFF111B21))
-                          : (isDark ? Colors.white : const Color(0xFF111B21)),
+                          ? (isDark ? MetricChatColors.sentText : const Color(0xFF111827))
+                          : (isDark ? MetricChatColors.receivedText : const Color(0xFF0F766E)),
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
                   const SizedBox(height: 3),
@@ -612,7 +612,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         timeStr,
                         style: TextStyle(
                           fontSize: 10,
-                          color: isDark ? Colors.white60 : Colors.black45,
+                          color: isDark ? MetricChatColors.timestamp : Colors.black45,
                         ),
                       ),
                       if (isMe) ...[
@@ -655,19 +655,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return const Icon(
         Icons.done_all_rounded,
         size: 15,
-        color: Color(0xFF34B7F1), // WhatsApp double blue ticks
+        color: MetricChatColors.readReceipt,
       );
     } else if (msg.status == 'delivered') {
       return Icon(
         Icons.done_all_rounded,
         size: 15,
-        color: isDark ? Colors.white54 : Colors.black45,
+        color: isDark ? MetricChatColors.timestamp : Colors.black45,
       );
     } else {
       return Icon(
         Icons.done_rounded,
         size: 15,
-        color: isDark ? Colors.white54 : Colors.black45,
+        color: isDark ? MetricChatColors.timestamp : Colors.black45,
       );
     }
   }
@@ -722,12 +722,12 @@ class _TextInputBarState extends State<_TextInputBar> {
     final isDark = widget.isDark;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF141724) : Colors.white,
+        color: isDark ? MetricColors.background : Colors.white,
         border: Border(
           top: BorderSide(
-            color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+            color: isDark ? MetricColors.border : AppColors.cardBorderLight,
             width: 1,
           ),
         ),
@@ -735,12 +735,16 @@ class _TextInputBarState extends State<_TextInputBar> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Text Field
+          // Text Field in neutral liquid glass pill
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1F2436) : const Color(0xFFF1F4F9),
-                borderRadius: BorderRadius.circular(24),
+                color: isDark ? MetricGlass.level2 : const Color(0xFFF1F4F9),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: isDark ? MetricGlass.border : Colors.transparent,
+                  width: 1.0,
+                ),
               ),
               child: TextField(
                 controller: _controller,
@@ -750,15 +754,15 @@ class _TextInputBarState extends State<_TextInputBar> {
                 minLines: 1,
                 style: TextStyle(
                   fontSize: 15,
-                  color: isDark ? Colors.white : Colors.black87,
+                  color: isDark ? MetricColors.textPrimary : Colors.black87,
                 ),
                 decoration: InputDecoration(
-                  hintText: 'Encrypted Message...',
+                  hintText: 'Message...',
                   hintStyle: TextStyle(
-                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                    color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
                     fontSize: 14,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                   border: InputBorder.none,
                 ),
                 onSubmitted: (_) => _submit(),
@@ -767,14 +771,32 @@ class _TextInputBarState extends State<_TextInputBar> {
           ),
           const SizedBox(width: 8),
 
-          // Send Button
-          IconButton.filled(
-            onPressed: _hasInputText ? _submit : null,
-            icon: const Icon(Icons.arrow_upward_rounded, size: 20),
-            style: IconButton.styleFrom(
-              backgroundColor: _hasInputText ? AppColors.primary : (isDark ? Colors.white12 : Colors.black12),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.all(12),
+          // Send Button: subtle turquoise highlight on active, neutral glass when inactive
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hasInputText
+                  ? MetricChatColors.sendButton
+                  : (isDark ? MetricGlass.level1 : Colors.black12),
+              border: Border.all(
+                color: _hasInputText
+                    ? Colors.transparent
+                    : (isDark ? MetricGlass.border : Colors.transparent),
+                width: 1.0,
+              ),
+            ),
+            child: IconButton(
+              onPressed: _hasInputText ? _submit : null,
+              icon: Icon(
+                Icons.arrow_upward_rounded,
+                size: 20,
+                color: _hasInputText
+                    ? Colors.black
+                    : (isDark ? MetricColors.textMuted : Colors.white70),
+              ),
+              padding: EdgeInsets.zero,
             ),
           ),
         ],

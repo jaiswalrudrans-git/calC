@@ -83,10 +83,11 @@ class ConversionHistoryScreen extends ConsumerWidget {
                 return Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                    color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                      color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+                      width: 1.0,
                     ),
                   ),
                   child: Row(
@@ -100,7 +101,7 @@ class ConversionHistoryScreen extends ConsumerWidget {
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.primary,
+                                color: isDark ? MetricColors.textSecondary : Colors.black54,
                               ),
                             ),
                             const SizedBox(height: 4),

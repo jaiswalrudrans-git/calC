@@ -440,11 +440,11 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-                  width: 1.2,
+                  color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+                  width: 1.0,
                 ),
               ),
               child: Column(
@@ -577,10 +577,11 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
                   leading: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.12),
+                      color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                       shape: BoxShape.circle,
+                      border: Border.all(color: isDark ? MetricGlass.border : Colors.grey.shade300, width: 1.0),
                     ),
-                    child: const Icon(Icons.shield_outlined, color: AppColors.primary, size: 20),
+                    child: Icon(Icons.shield_outlined, color: isDark ? MetricColors.textPrimary : Colors.black87, size: 20),
                   ),
                   title: const Text('Security PIN & Knock Pattern', style: TextStyle(fontWeight: FontWeight.w700)),
                   subtitle: const Text('Set secret pattern and access passcode (PIN required)'),
@@ -615,11 +616,11 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
   Widget _buildCard(bool isDark, {required List<Widget> children}) {
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-          width: 1.2,
+          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+          width: 1.0,
         ),
       ),
       child: Column(children: children),

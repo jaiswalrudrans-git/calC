@@ -129,7 +129,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(opt['label'] as String),
                 if (_autoLockSeconds == s)
-                  const Icon(Icons.check_rounded, color: AppColors.primary, size: 18),
+                  Icon(Icons.check_rounded, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black, size: 18),
               ],
             ),
           );
@@ -143,17 +143,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        backgroundColor: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Row(
           children: [
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.15),
+                color: isDark ? MetricGlass.level2 : Colors.grey.shade200,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.account_circle_rounded, color: AppColors.primary, size: 24),
+              child: Icon(Icons.account_circle_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87, size: 24),
             ),
             const SizedBox(width: 12),
             const Text('Account Details', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
@@ -178,7 +178,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           FilledButton(
             onPressed: () => Navigator.pop(ctx),
             style: FilledButton.styleFrom(
-              backgroundColor: AppColors.primary,
+              backgroundColor: isDark ? Colors.white : Colors.black,
+              foregroundColor: isDark ? Colors.black : Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             child: const Text('Close'),
@@ -317,7 +318,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+      backgroundColor: isDark ? MetricColors.background : AppColors.backgroundLight,
       appBar: AppBar(
         title: const Text('Settings & Privacy'),
       ),
@@ -329,16 +330,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: isDark
-                      ? [const Color(0xFF1E2845), const Color(0xFF161F38)]
-                      : [const Color(0xFFEEF3FF), const Color(0xFFE0ECFF)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                color: isDark ? MetricGlass.level1 : const Color(0xFFF8FAFC),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: isDark ? const Color(0xFF2C3B63) : const Color(0xFFD6E4FF),
+                  color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                  width: 1.0,
                 ),
               ),
               child: Column(
@@ -349,19 +345,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withAlpha(38),
+                          color: isDark ? MetricGlass.level2 : Colors.grey.shade200,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.verified_user_rounded, color: AppColors.primary, size: 20),
+                        child: Icon(
+                          Icons.verified_user_rounded,
+                          color: isDark ? MetricColors.textPrimary : Colors.black87,
+                          size: 20,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
+                            Text(
                               'Signal Protocol Engine',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: isDark ? MetricColors.textPrimary : Colors.black87,
+                              ),
                             ),
                             Text(
                               _isPaired
@@ -379,7 +383,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Divider(),
+                  Divider(color: isDark ? MetricGlass.border : Colors.grey.shade300),
                   const SizedBox(height: 6),
                   _buildSecurityBullet('End-to-End Encryption', 'X25519 Double Ratchet + AES-256-GCM'),
                   _buildSecurityBullet('Key Storage', 'Hardware Keystore / iOS Keychain'),
@@ -405,11 +409,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Row(
+                          Row(
                             children: [
-                              Icon(Icons.tag_rounded, size: 18, color: AppColors.primary),
-                              SizedBox(width: 8),
-                              Text('My Permanent Connect Code', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                              Icon(Icons.tag_rounded, size: 18, color: isDark ? MetricColors.textPrimary : Colors.black87),
+                              const SizedBox(width: 8),
+                              Text('My Permanent Connect Code', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isDark ? MetricColors.textPrimary : Colors.black87)),
                             ],
                           ),
                           if (_connectCode != null)
@@ -431,23 +435,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 6),
                       SelectableText(
                         _connectCode ?? 'Generating...',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 22,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 3.0,
-                          color: AppColors.primary,
+                          color: isDark ? MetricColors.textPrimary : Colors.black87,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         'Share this permanent 6-digit code with contacts so they can add you.',
-                        style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                        style: TextStyle(fontSize: 11, color: isDark ? MetricColors.textMuted : AppColors.textMutedLight),
                       ),
                     ],
                   ),
                 ),
-                const Divider(height: 1),
+                Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
 
                 // My Device UID
                 Padding(
@@ -458,11 +462,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Row(
+                          Row(
                             children: [
-                              Icon(Icons.fingerprint_rounded, size: 18, color: AppColors.tealIcon),
-                              SizedBox(width: 8),
-                              Text('My Device ID', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                              Icon(Icons.fingerprint_rounded, size: 18, color: isDark ? MetricColors.textSecondary : Colors.black54),
+                              const SizedBox(width: 8),
+                              const Text('My Device ID', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
                             ],
                           ),
                           IconButton(
@@ -486,18 +490,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 12,
-                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                          color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         'Speak out or match this ID with your peer to confirm your identity.',
-                        style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                        style: TextStyle(fontSize: 11, color: isDark ? MetricColors.textMuted : AppColors.textMutedLight),
                       ),
                     ],
                   ),
                 ),
-                const Divider(height: 1),
+                Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
 
                 // Connected Peer UID
                 Padding(
@@ -542,7 +546,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           fontFamily: 'monospace',
                           fontSize: 12,
                           fontWeight: _isPaired ? FontWeight.bold : FontWeight.normal,
-                          color: _isPaired ? AppColors.secureGreen : (isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                          color: _isPaired ? AppColors.secureGreen : (isDark ? MetricColors.textMuted : AppColors.textMutedLight),
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -550,7 +554,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _isPaired
                             ? 'Your peer\'s "My Device ID" MUST match this exact value.'
                             : 'Once paired, your peer\'s cryptographic device ID will appear here.',
-                        style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                        style: TextStyle(fontSize: 11, color: isDark ? MetricColors.textMuted : AppColors.textMutedLight),
                       ),
                     ],
                   ),
@@ -558,16 +562,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 // 12-Digit Safety Number Card (if paired)
                 if (_isPaired && _safetyNumber != null) ...[
-                  const Divider(height: 1),
+                  Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF132A22) : const Color(0xFFE8F5E9),
+                        color: isDark ? const Color(0x1810B981) : const Color(0xFFE8F5E9),
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: AppColors.secureGreen.withValues(alpha: 0.4)),
+                        border: Border.all(color: const Color(0x4010B981)),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.center,
@@ -603,10 +607,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Text(
                             'Read these 12 digits aloud to your partner. If the digits on their screen match yours, you are 100% verified with zero man-in-the-middle.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                            style: TextStyle(fontSize: 11, color: isDark ? MetricColors.textMuted : AppColors.textMutedLight),
                           ),
                           const SizedBox(height: 12),
-                          FilledButton.tonalIcon(
+                          OutlinedButton.icon(
                             onPressed: () async {
                               HapticFeedback.mediumImpact();
                               final next = !_isSafetyVerified;
@@ -616,13 +620,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             icon: Icon(
                               _isSafetyVerified ? Icons.check_circle_rounded : Icons.verified_outlined,
                               size: 18,
-                              color: _isSafetyVerified ? AppColors.secureGreen : null,
+                              color: _isSafetyVerified ? AppColors.secureGreen : (isDark ? MetricColors.textPrimary : Colors.black87),
                             ),
                             label: Text(
                               _isSafetyVerified ? 'Connection Verified ✓' : 'Mark as Verified Partner',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: _isSafetyVerified ? AppColors.secureGreen : null,
+                                color: _isSafetyVerified ? AppColors.secureGreen : (isDark ? MetricColors.textPrimary : Colors.black87),
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide(
+                                color: _isSafetyVerified ? AppColors.secureGreen : (isDark ? MetricGlass.border : Colors.grey.shade300),
                               ),
                             ),
                           ),
@@ -634,7 +643,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 // Reset / Unpair Button
                 if (_isPaired) ...[
-                  const Divider(height: 1),
+                  Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                   ListTile(
                     leading: const Icon(Icons.link_off_rounded, color: AppColors.alertRed),
                     title: const Text('Reset & Unpair Connection', style: TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.w600)),
@@ -653,27 +662,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
               isDark,
               children: [
                 SwitchListTile(
-                  secondary: const Icon(Icons.lock_rounded, color: AppColors.primary),
+                  secondary: Icon(Icons.lock_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
                   title: const Text('Biometric App Lock', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text('Require Face ID / Fingerprint to open'),
                   value: _biometricsEnabled,
-                  activeThumbColor: AppColors.primary,
+                  activeThumbColor: isDark ? Colors.white : Colors.black,
+                  activeTrackColor: isDark ? Colors.white38 : Colors.black26,
                   onChanged: (val) async {
                     await SecureKeyStorage.setBiometricsEnabled(val);
                     setState(() => _biometricsEnabled = val);
                   },
                 ),
-                const Divider(height: 1),
+                Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                 ListTile(
-                  leading: const Icon(Icons.timer_outlined, color: AppColors.purpleIcon),
+                  leading: Icon(Icons.timer_outlined, color: isDark ? MetricColors.textSecondary : Colors.black54),
                   title: const Text('Auto-Lock Delay', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: Text(_autoLockSeconds == 0 ? 'Immediately' : '$_autoLockSeconds seconds'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: _showAutoLockDialog,
                 ),
-                const Divider(height: 1),
+                Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                 ListTile(
-                  leading: const Icon(Icons.dialpad_rounded, color: AppColors.amberIcon),
+                  leading: Icon(Icons.dialpad_rounded, color: isDark ? MetricColors.textSecondary : Colors.black54),
                   title: const Text('Secret Knock Combination', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text('Custom tap sequence to open vault'),
                   trailing: const Icon(Icons.chevron_right_rounded),
@@ -695,7 +705,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               isDark,
               children: [
                 ListTile(
-                  leading: const Icon(Icons.account_circle_outlined, color: AppColors.primary),
+                  leading: Icon(Icons.account_circle_outlined, color: isDark ? MetricColors.textPrimary : Colors.black87),
                   title: Text(
                     _accountUsername != null ? 'Account: @$_accountUsername' : 'No Account Configured',
                     style: const TextStyle(fontWeight: FontWeight.w600),
@@ -710,10 +720,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   onTap: () {
                     if (_isAccountLoggedIn) {
-                      // Already logged in: show username & details, do NOT re-open login portal
                       _showAccountInfoDialog();
                     } else {
-                      // Logged out: open login or create account options
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -728,9 +736,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     }
                   },
                 ),
-                const Divider(height: 1),
+                Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                 ListTile(
-                  leading: const Icon(Icons.key_rounded, color: AppColors.warningAmber),
+                  leading: Icon(Icons.key_rounded, color: isDark ? MetricColors.textSecondary : Colors.black54),
                   title: const Text('Reset Password with Recovery Code', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text('Zero-knowledge account recovery flow'),
                   trailing: const Icon(Icons.chevron_right_rounded),
@@ -746,7 +754,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 if (_isAccountLoggedIn) ...[
-                  const Divider(height: 1),
+                  Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                   ListTile(
                     leading: const Icon(Icons.logout_rounded, color: AppColors.alertRed),
                     title: const Text('Log Out Account', style: TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.w600)),
@@ -765,18 +773,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               isDark,
               children: [
                 if (!_isOwnerDevice) ...[
-                  const ListTile(
-                    leading: Icon(Icons.shield_outlined, color: AppColors.textMutedDark),
-                    title: Text('Peer Device Mode', style: TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text('Cloud backups are managed exclusively by the owner device.'),
+                  ListTile(
+                    leading: Icon(Icons.shield_outlined, color: isDark ? MetricColors.textMuted : AppColors.textMutedDark),
+                    title: const Text('Peer Device Mode', style: TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: const Text('Cloud backups are managed exclusively by the owner device.'),
                   ),
                 ] else ...[
                   SwitchListTile(
-                    secondary: const Icon(Icons.cloud_sync_rounded, color: AppColors.cyanIcon),
+                    secondary: Icon(Icons.cloud_sync_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
                     title: const Text('Encrypted Google Drive Backup', style: TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: const Text('Zero-knowledge ciphertext sync to owner\'s Drive'),
                     value: _driveBackupEnabled,
-                    activeThumbColor: AppColors.primary,
+                    activeThumbColor: isDark ? Colors.white : Colors.black,
+                    activeTrackColor: isDark ? Colors.white38 : Colors.black26,
                     onChanged: (val) async {
                       await SecureKeyStorage.setDriveBackupEnabled(val);
                       setState(() => _driveBackupEnabled = val);
@@ -800,7 +809,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                     },
                   ),
-                  const Divider(height: 1),
+                  Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     child: Column(
@@ -814,7 +823,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 Icon(
                                   _driveEmail != null ? Icons.account_circle_rounded : Icons.account_circle_outlined,
                                   size: 18,
-                                  color: _driveEmail != null ? AppColors.secureGreen : AppColors.textMutedDark,
+                                  color: _driveEmail != null ? AppColors.secureGreen : (isDark ? MetricColors.textMuted : AppColors.textMutedDark),
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
@@ -832,7 +841,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 child: const Text('Disconnect', style: TextStyle(color: AppColors.alertRed, fontSize: 12)),
                               )
                             else
-                              FilledButton.tonal(
+                              OutlinedButton(
                                 onPressed: () async {
                                   final result = await GoogleDriveBackupService.instance.signIn();
                                   if (!mounted || !context.mounted) return;
@@ -851,7 +860,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     );
                                   }
                                 },
-                                style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                                style: OutlinedButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  side: BorderSide(color: isDark ? MetricGlass.border : Colors.grey.shade300),
+                                ),
                                 child: const Text('Connect', style: TextStyle(fontSize: 12)),
                               ),
                           ],
@@ -860,12 +872,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Row(
                           children: [
                             if (_isSyncing)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 8),
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
                                 child: SizedBox(
                                   width: 12,
                                   height: 12,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: isDark ? Colors.white : Colors.black),
                                 ),
                               ),
                             Text(
@@ -875,7 +887,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
-                                color: _isSyncing ? AppColors.primary : AppColors.secureGreen,
+                                color: _isSyncing ? (isDark ? Colors.white : Colors.black) : AppColors.secureGreen,
                               ),
                             ),
                           ],
@@ -885,13 +897,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _lastSyncTime != null
                               ? 'Last synced: ${DateFormat('MMM d, yyyy • h:mm a').format(DateTime.fromMillisecondsSinceEpoch(_lastSyncTime!))}'
                               : 'Never backed up yet',
-                          style: TextStyle(fontSize: 11, color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                          style: TextStyle(fontSize: 11, color: isDark ? MetricColors.textMuted : AppColors.textMutedLight),
                         ),
                         const SizedBox(height: 12),
                         Row(
                           children: [
                             Expanded(
-                              child: FilledButton.tonalIcon(
+                              child: OutlinedButton.icon(
                                 onPressed: _isSyncing
                                     ? null
                                     : () async {
@@ -901,6 +913,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       },
                                 icon: const Icon(Icons.sync_rounded, size: 16),
                                 label: const Text('Back Up Now'),
+                                style: OutlinedButton.styleFrom(
+                                  backgroundColor: isDark ? MetricGlass.level1 : Colors.grey.shade100,
+                                  side: BorderSide(color: isDark ? MetricGlass.border : Colors.grey.shade300),
+                                ),
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -909,6 +925,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 onPressed: _showRestoreDialog,
                                 icon: const Icon(Icons.cloud_download_rounded, size: 16),
                                 label: const Text('Restore'),
+                                style: OutlinedButton.styleFrom(
+                                  backgroundColor: isDark ? MetricGlass.level1 : Colors.grey.shade100,
+                                  side: BorderSide(color: isDark ? MetricGlass.border : Colors.grey.shade300),
+                                ),
                               ),
                             ),
                           ],
@@ -917,7 +937,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
-                const Divider(height: 1),
+                Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                 ListTile(
                   leading: const Icon(Icons.cleaning_services_rounded, color: AppColors.alertRed),
                   title: const Text('Clear Decrypted Local Cache', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -984,27 +1004,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
           fontSize: 11,
           fontWeight: FontWeight.w700,
           letterSpacing: 1.1,
-          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+          color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
         ),
       ),
     );
   }
 
   Widget _buildCard(bool isDark, {required List<Widget> children}) {
-    return Material(
-      color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
-      borderRadius: BorderRadius.circular(18),
-      clipBehavior: Clip.antiAlias,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-            width: 1.2,
-          ),
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+          width: 1.0,
         ),
-        child: Column(children: children),
       ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(children: children),
     );
   }
 

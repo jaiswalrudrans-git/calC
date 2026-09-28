@@ -226,15 +226,9 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
             ),
             child: Container(
               decoration: BoxDecoration(
-                color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                color: isDark ? const Color(0xFF0F0F0F) : AppColors.surfaceLight,
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.2),
-                    blurRadius: 20,
-                    offset: const Offset(0, -4),
-                  ),
-                ],
+                border: Border.all(color: isDark ? MetricGlass.border : AppColors.cardBorderLight, width: 1),
               ),
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
               child: Column(
@@ -257,10 +251,11 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.15),
+                          color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                           shape: BoxShape.circle,
+                          border: Border.all(color: isDark ? MetricGlass.border : Colors.grey.shade300, width: 1),
                         ),
-                        child: const Icon(Icons.person_add_rounded, color: AppColors.primary, size: 24),
+                        child: Icon(Icons.person_add_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87, size: 22),
                       ),
                       const SizedBox(width: 14),
                       Expanded(
@@ -470,19 +465,21 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0F111A) : const Color(0xFFF6F8FC),
+      backgroundColor: isDark ? MetricColors.background : const Color(0xFFF6F8FC),
       appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF141724) : Colors.white,
-        elevation: 0.5,
+        backgroundColor: isDark ? MetricColors.background : Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         title: Row(
           children: [
             Container(
               padding: const EdgeInsets.all(7),
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.15),
+                color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: isDark ? MetricGlass.border : Colors.transparent, width: 1),
               ),
-              child: const Icon(Icons.lock_rounded, color: AppColors.primary, size: 20),
+              child: Icon(Icons.lock_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87, size: 18),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -525,10 +522,16 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddContactDialog,
-        backgroundColor: _contacts.length >= 5 ? Colors.grey : AppColors.primary,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.person_add_rounded),
-        label: Text(_contacts.length >= 5 ? '5/5 Limit' : 'Add Contact'),
+        backgroundColor: _contacts.length >= 5
+            ? (isDark ? MetricGlass.level1 : Colors.grey)
+            : (isDark ? Colors.white : Colors.black),
+        foregroundColor: isDark ? Colors.black : Colors.white,
+        elevation: 0,
+        icon: const Icon(Icons.person_add_rounded, size: 18),
+        label: Text(
+          _contacts.length >= 5 ? '5/5 Limit' : 'Add Contact',
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -582,18 +585,12 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF141724) : Colors.white,
+        color: isDark ? MetricGlass.level1 : Colors.white,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+          width: 1.0,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -647,17 +644,17 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
               Expanded(
                 child: SelectableText(
                   _connectCode ?? '--- ---',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 4,
-                    color: AppColors.primary,
+                    color: isDark ? MetricColors.textPrimary : Colors.black87,
                   ),
                 ),
               ),
-              IconButton.filledTonal(
+              IconButton(
                 onPressed: _copyConnectCode,
-                icon: const Icon(Icons.copy_rounded, size: 18),
+                icon: Icon(Icons.copy_rounded, size: 18, color: isDark ? MetricColors.textSecondary : Colors.black54),
                 tooltip: 'Copy Code',
               ),
             ],
@@ -679,10 +676,11 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF141724) : Colors.white,
+        color: isDark ? MetricGlass.level1 : Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+          width: 1.0,
         ),
       ),
       child: Column(
@@ -690,10 +688,11 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.12),
+              color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
               shape: BoxShape.circle,
+              border: Border.all(color: isDark ? MetricGlass.border : Colors.grey.shade300, width: 1.0),
             ),
-            child: const Icon(Icons.people_outline_rounded, color: AppColors.primary, size: 42),
+            child: Icon(Icons.people_outline_rounded, color: isDark ? MetricColors.textSecondary : Colors.black54, size: 40),
           ),
           const SizedBox(height: 16),
           Text(
@@ -728,23 +727,24 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF141724) : Colors.white,
+        color: isDark ? MetricGlass.level1 : Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+          width: 1.0,
         ),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         leading: CircleAvatar(
-          radius: 24,
-          backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+          radius: 22,
+          backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade200,
           child: Text(
             contact.username.isNotEmpty ? contact.username[0].toUpperCase() : '?',
-            style: const TextStyle(
-              color: AppColors.primary,
+            style: TextStyle(
+              color: isDark ? MetricColors.textPrimary : Colors.black87,
               fontWeight: FontWeight.bold,
-              fontSize: 18,
+              fontSize: 16,
             ),
           ),
         ),

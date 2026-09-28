@@ -187,21 +187,14 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: isTarget
-              ? widget.category.iconColor.withValues(alpha: 0.4)
-              : (isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight),
-          width: 1.5,
+              ? (isDark ? Colors.white24 : widget.category.iconColor.withValues(alpha: 0.4))
+              : (isDark ? MetricGlass.border : AppColors.cardBorderLight),
+          width: 1.0,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -369,15 +362,14 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        color: isDark ? MetricColors.background : AppColors.surfaceLight,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
+        border: Border(
+          top: BorderSide(
+            color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+            width: 1.0,
           ),
-        ],
+        ),
       ),
       child: Column(
         children: keys.map((row) {
@@ -403,8 +395,8 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
     final isSpecial = ['C', '±', '⌫'].contains(key);
     return Material(
       color: isSpecial
-          ? (isDark ? const Color(0xFF2B2F45) : const Color(0xFFE8EEF8))
-          : (isDark ? const Color(0xFF1E2235) : const Color(0xFFF1F4F9)),
+          ? (isDark ? MetricGlass.level2 : const Color(0xFFE8EEF8))
+          : (isDark ? MetricGlass.level1 : const Color(0xFFF1F4F9)),
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         onTap: () => _onKeyPress(key),

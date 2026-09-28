@@ -97,10 +97,10 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E2845) : const Color(0xFFEEF3FF),
+                color: isDark ? MetricGlass.level1 : const Color(0xFFF8F9FE),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: isDark ? const Color(0xFF2C3B63) : const Color(0xFFD6E4FF),
+                  color: isDark ? MetricGlass.border : const Color(0xFFE2E8F0),
                 ),
               ),
               child: Row(
@@ -109,10 +109,10 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withAlpha(30),
+                      color: isDark ? MetricGlass.level2 : Colors.grey.withAlpha(30),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.dialpad_rounded, color: AppColors.primary, size: 24),
+                    child: Icon(Icons.dialpad_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87, size: 24),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -129,7 +129,7 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                           style: TextStyle(
                             fontSize: 12,
                             height: 1.35,
-                            color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                            color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
                           ),
                         ),
                       ],
@@ -148,7 +148,7 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 1.1,
-                color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
               ),
             ),
             const SizedBox(height: 10),
@@ -156,14 +156,17 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                  color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
                 ),
               ),
               child: _currentSequence.isEmpty
-                  ? const Text('No combination set')
+                  ? Text(
+                      'No combination set',
+                      style: TextStyle(color: isDark ? MetricColors.textMuted : AppColors.textMutedLight),
+                    )
                   : _buildSequenceChips(_currentSequence, isDark),
             ),
 
@@ -179,7 +182,9 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1.1,
-                    color: _isRecording ? AppColors.primary : (isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
+                    color: _isRecording
+                        ? (isDark ? MetricColors.textPrimary : Colors.black)
+                        : (isDark ? MetricColors.textMuted : AppColors.textMutedLight),
                   ),
                 ),
                 if (_isRecording)
@@ -211,7 +216,12 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                   icon: const Icon(Icons.touch_app_rounded),
                   label: const Text('Tap to Record New Sequence', style: TextStyle(fontWeight: FontWeight.w700)),
                   style: FilledButton.styleFrom(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    backgroundColor: isDark ? MetricGlass.level2 : const Color(0xFFF1F5F9),
+                    foregroundColor: isDark ? MetricColors.textPrimary : Colors.black87,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(color: isDark ? MetricGlass.border : Colors.black12),
+                    ),
                   ),
                 ),
               )
@@ -221,9 +231,12 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF1E2235) : const Color(0xFFF1F5F9),
+                  color: isDark ? MetricGlass.level2 : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: AppColors.primary, width: 1.5),
+                  border: Border.all(
+                    color: isDark ? MetricGlass.borderHighlight : Colors.black26,
+                    width: 1.5,
+                  ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -233,11 +246,15 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                       children: [
                         Text(
                           'Taps Recorded: ${_newSequence.length} / 8',
-                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: isDark ? MetricColors.textPrimary : Colors.black87,
+                          ),
                         ),
                         if (_newSequence.isNotEmpty)
                           IconButton(
-                            icon: const Icon(Icons.backspace_outlined, size: 18),
+                            icon: Icon(Icons.backspace_outlined, size: 18, color: isDark ? MetricColors.textSecondary : Colors.black54),
                             onPressed: () {
                               setState(() {
                                 _newSequence.removeLast();
@@ -253,7 +270,7 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                             style: TextStyle(
                               fontSize: 13,
                               fontStyle: FontStyle.italic,
-                              color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                              color: isDark ? MetricColors.textMuted : AppColors.textMutedLight,
                             ),
                           )
                         : _buildSequenceChips(_newSequence, isDark),
@@ -277,11 +294,11 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                 itemBuilder: (context, index) {
                   final cat = UnitCatalog.categories[index];
                   return Material(
-                    color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                    color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                       side: BorderSide(
-                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                        color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
                       ),
                     ),
                     child: InkWell(
@@ -297,7 +314,7 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
-                              color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                              color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                             ),
                           ),
                         ],
@@ -315,7 +332,10 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
                 child: FilledButton(
                   onPressed: _newSequence.length >= 2 ? _saveNewSequence : null,
                   style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.primary,
+                    backgroundColor: isDark ? Colors.white : Colors.black,
+                    foregroundColor: isDark ? Colors.black : Colors.white,
+                    disabledBackgroundColor: isDark ? MetricGlass.level1 : Colors.black12,
+                    disabledForegroundColor: isDark ? MetricColors.textMuted : Colors.black26,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   ),
                   child: const Text('Save Combination', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),

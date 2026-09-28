@@ -17,7 +17,7 @@ class WelcomeAuthScreen extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+      backgroundColor: isDark ? MetricColors.background : AppColors.backgroundLight,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
@@ -31,30 +31,20 @@ class WelcomeAuthScreen extends StatelessWidget {
               Column(
                 children: [
                   Container(
-                    width: 96,
-                    height: 96,
+                    width: 88,
+                    height: 88,
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          AppColors.primary,
-                          AppColors.accent,
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
+                      color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                       shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.35),
-                          blurRadius: 24,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
+                      border: Border.all(
+                        color: isDark ? MetricGlass.borderHighlight : Colors.grey.shade300,
+                        width: 1.0,
+                      ),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.shield_rounded,
-                      size: 52,
-                      color: Colors.white,
+                      size: 44,
+                      color: isDark ? MetricColors.textPrimary : Colors.black87,
                     ),
                   ),
                   const SizedBox(height: 28),
@@ -64,7 +54,7 @@ class WelcomeAuthScreen extends StatelessWidget {
                       fontSize: 36,
                       fontWeight: FontWeight.w900,
                       letterSpacing: -1.0,
-                      color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                      color: isDark ? MetricColors.textPrimary : AppColors.textPrimaryLight,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -72,32 +62,36 @@ class WelcomeAuthScreen extends StatelessWidget {
                     'Private End-to-End Encrypted Messenger',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 15,
+                      fontSize: 14.5,
                       fontWeight: FontWeight.w500,
-                      color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                      color: isDark ? MetricColors.textSecondary : AppColors.textSecondaryLight,
                     ),
                   ),
                   const SizedBox(height: 18),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                     decoration: BoxDecoration(
-                      color: AppColors.secureGreen.withValues(alpha: 0.12),
+                      color: isDark ? MetricGlass.level1 : Colors.grey.shade100,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: AppColors.secureGreen.withValues(alpha: 0.3),
+                        color: isDark ? MetricGlass.border : Colors.grey.shade300,
                       ),
                     ),
-                    child: const Row(
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.lock_outline_rounded, size: 14, color: AppColors.secureGreen),
-                        SizedBox(width: 6),
+                        Icon(
+                          Icons.lock_outline_rounded,
+                          size: 14,
+                          color: isDark ? MetricColors.textSecondary : Colors.black54,
+                        ),
+                        const SizedBox(width: 6),
                         Text(
                           'Zero-Knowledge Architecture',
                           style: TextStyle(
                             fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.secureGreen,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? MetricColors.textSecondary : Colors.black87,
                           ),
                         ),
                       ],
@@ -106,7 +100,7 @@ class WelcomeAuthScreen extends StatelessWidget {
                 ],
               ),
 
-              // Mandatory Action Buttons (No Skip / No Bypass)
+              // Mandatory Action Buttons
               Column(
                 children: [
                   SizedBox(
@@ -125,11 +119,12 @@ class WelcomeAuthScreen extends StatelessWidget {
                         );
                       },
                       style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.primary,
+                        backgroundColor: isDark ? Colors.white : Colors.black,
+                        foregroundColor: isDark ? Colors.black : Colors.white,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        elevation: 2,
+                        elevation: 0,
                       ),
                       child: const Text(
                         'Create Account',
@@ -154,20 +149,21 @@ class WelcomeAuthScreen extends StatelessWidget {
                         );
                       },
                       style: OutlinedButton.styleFrom(
+                        backgroundColor: isDark ? MetricGlass.level1 : Colors.white,
+                        foregroundColor: isDark ? MetricColors.textPrimary : Colors.black87,
                         side: BorderSide(
-                          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-                          width: 1.5,
+                          color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                          width: 1.0,
                         ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                      child: Text(
+                      child: const Text(
                         'Log In',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
-                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
                         ),
                       ),
                     ),

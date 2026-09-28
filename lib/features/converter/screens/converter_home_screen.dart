@@ -238,11 +238,11 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
             child: Container(
               height: 48,
               decoration: BoxDecoration(
-                color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+                color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
                 borderRadius: BorderRadius.circular(24),
                 border: Border.all(
-                  color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-                  width: 1.2,
+                  color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+                  width: 1.0,
                 ),
               ),
               child: TextField(
@@ -313,25 +313,12 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
       height: 168,
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       decoration: BoxDecoration(
+        color: isDark ? MetricGlass.level1 : const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(24),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF1E2845), const Color(0xFF161F38)]
-              : [const Color(0xFFEEF3FF), const Color(0xFFDFEBFF)],
-        ),
         border: Border.all(
-          color: isDark ? const Color(0xFF2C3B63) : const Color(0xFFD6E4FF),
-          width: 1.2,
+          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+          width: 1.0,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: (isDark ? Colors.black : const Color(0xFF2563EB)).withValues(alpha: 0.08),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
       ),
       child: Row(
         children: [
@@ -372,24 +359,17 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                // 3D Calculator card
+                // Neutral Dark Calculator card
                 Container(
                   width: 72,
                   height: 98,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    color: isDark ? const Color(0xFF161616) : Colors.white,
                     borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF2563EB).withValues(alpha: 0.35),
-                        blurRadius: 16,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
+                    border: Border.all(
+                      color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                      width: 1.0,
+                    ),
                   ),
                   padding: const EdgeInsets.all(7),
                   child: Column(
@@ -458,22 +438,19 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: (isDark ? const Color(0xFF253352) : Colors.white).withValues(alpha: 0.9),
+        color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        border: Border.all(
+          color: isDark ? MetricGlass.border : Colors.grey.shade300,
+          width: 1.0,
+        ),
       ),
       child: Text(
         label,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w700,
-          color: isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB),
+          color: isDark ? MetricColors.textPrimary : Colors.black87,
         ),
       ),
     );
@@ -481,12 +458,12 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
 
   Widget _buildCategoryCard(UnitCategory category, bool isDark) {
     return Material(
-      color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+      color: isDark ? MetricGlass.level1 : AppColors.surfaceLight,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
         side: BorderSide(
-          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-          width: 1.2,
+          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
+          width: 1.0,
         ),
       ),
       child: InkWell(
