@@ -51,6 +51,7 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
   }
 
   void _showDecimalDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final options = [2, 4, 6, 8];
     showDialog(
       context: context,
@@ -68,7 +69,7 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
               children: [
                 Text('$d Decimal Places (e.g. 0.${'0' * d})'),
                 if (_decimalPlaces == d)
-                  const Icon(Icons.check_rounded, color: AppColors.primary, size: 20),
+                  Icon(Icons.check_rounded, color: isDark ? Colors.white : Colors.black87, size: 20),
               ],
             ),
           );
@@ -78,6 +79,7 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
   }
 
   void _promptPinDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final pinController = TextEditingController();
     String? errorMessage;
 
@@ -109,10 +111,14 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.12),
+                    color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                     shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                      width: 1.0,
+                    ),
                   ),
-                  child: const Icon(Icons.lock_rounded, color: AppColors.primary, size: 22),
+                  child: Icon(Icons.lock_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87, size: 22),
                 ),
                 const SizedBox(width: 12),
                 const Text('Security PIN', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -226,10 +232,14 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
                 leading: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.15),
+                    color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                     borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                      width: 1.0,
+                    ),
                   ),
-                  child: const Icon(Icons.dialpad_rounded, color: AppColors.primary),
+                  child: Icon(Icons.dialpad_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
                 ),
                 title: const Text('Configure Knock Pattern', style: TextStyle(fontWeight: FontWeight.w600)),
                 subtitle: const Text('Set tap sequence on unit categories (e.g. Length → Pressure)'),
@@ -500,7 +510,7 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
               isDark,
               children: [
                 ListTile(
-                  leading: const Icon(Icons.pin_outlined, color: AppColors.primary),
+                  leading: Icon(Icons.pin_outlined, color: isDark ? MetricColors.textPrimary : Colors.black87),
                   title: const Text('Decimal Places', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: Text('$_decimalPlaces decimal precision for results'),
                   trailing: const Icon(Icons.chevron_right_rounded),
@@ -512,7 +522,8 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
                   title: const Text('Haptic Feedback', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text('Vibrate gently on conversion taps & actions'),
                   value: _hapticsEnabled,
-                  activeThumbColor: AppColors.primary,
+                  activeThumbColor: isDark ? Colors.white : Colors.black,
+                  activeTrackColor: isDark ? Colors.white38 : Colors.black26,
                   onChanged: (val) {
                     setState(() => _hapticsEnabled = val);
                     _updatePreference('calc_haptics', val);
@@ -524,7 +535,8 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
                   title: const Text('Auto-Copy Results', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text('Automatically copy converted numbers'),
                   value: _autoCopyEnabled,
-                  activeThumbColor: AppColors.primary,
+                  activeThumbColor: isDark ? Colors.white : Colors.black,
+                  activeTrackColor: isDark ? Colors.white38 : Colors.black26,
                   onChanged: (val) {
                     setState(() => _autoCopyEnabled = val);
                     _updatePreference('calc_auto_copy', val);
@@ -536,7 +548,8 @@ class _ConverterSettingsScreenState extends ConsumerState<ConverterSettingsScree
                   title: const Text('Thousands Separators', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text('Display commas in large numbers (1,000,000)'),
                   value: _useGroupingSeparators,
-                  activeThumbColor: AppColors.primary,
+                  activeThumbColor: isDark ? Colors.white : Colors.black,
+                  activeTrackColor: isDark ? Colors.white38 : Colors.black26,
                   onChanged: (val) {
                     setState(() => _useGroupingSeparators = val);
                     _updatePreference('calc_grouping', val);

@@ -201,10 +201,14 @@ class GoogleDriveBackupService {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.12),
+                color: isDark ? MetricGlass.level2 : Colors.grey.shade100,
                 shape: BoxShape.circle,
+                border: Border.all(
+                  color: isDark ? MetricGlass.border : Colors.grey.shade300,
+                  width: 1.0,
+                ),
               ),
-              child: const Icon(Icons.cloud_upload_rounded, color: AppColors.primary, size: 36),
+              child: Icon(Icons.cloud_upload_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87, size: 36),
             ),
             const SizedBox(height: 16),
             const Text(
@@ -259,7 +263,8 @@ class GoogleDriveBackupService {
                     icon: const Icon(Icons.cloud_done_rounded, size: 18),
                     label: const Text('Connect Drive'),
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                      backgroundColor: isDark ? Colors.white : Colors.black,
+                      foregroundColor: isDark ? Colors.black : Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                   ),

@@ -371,9 +371,11 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: isDark ? cat.iconColor.withAlpha(40) : cat.badgeColor,
+        color: cat.getBadgeColor(isDark),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: cat.iconColor.withAlpha(80)),
+        border: Border.all(
+          color: cat.iconColor.withValues(alpha: isDark ? 0.4 : 0.3),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -385,7 +387,7 @@ class _SecretKnockScreenState extends State<SecretKnockScreen> {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : cat.iconColor,
+              color: isDark ? Colors.white : AppColors.textPrimaryLight,
             ),
           ),
         ],

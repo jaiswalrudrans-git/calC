@@ -143,7 +143,7 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
                       child: IconButton.filledTonal(
                         onPressed: _swapUnits,
                         style: IconButton.styleFrom(
-                          backgroundColor: widget.category.badgeColor,
+                          backgroundColor: widget.category.getBadgeColor(isDark),
                           foregroundColor: widget.category.iconColor,
                         ),
                         icon: const Icon(Icons.swap_vert_rounded, size: 24),
@@ -217,7 +217,7 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: widget.category.badgeColor,
+                    color: widget.category.getBadgeColor(isDark),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -395,7 +395,7 @@ class _UnitDetailScreenState extends ConsumerState<UnitDetailScreen> {
     final isSpecial = ['C', '±', '⌫'].contains(key);
     return Material(
       color: isSpecial
-          ? (isDark ? MetricGlass.level2 : const Color(0xFFE8EEF8))
+          ? (isDark ? MetricGlass.level2 : widget.category.getBadgeColor(isDark))
           : (isDark ? MetricGlass.level1 : const Color(0xFFF1F4F9)),
       borderRadius: BorderRadius.circular(16),
       child: InkWell(

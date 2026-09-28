@@ -249,7 +249,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-          backgroundColor: AppColors.primary,
+          backgroundColor: Color(0xFF1E293B),
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: 3),
         ),

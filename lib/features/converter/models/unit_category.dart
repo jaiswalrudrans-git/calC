@@ -59,6 +59,13 @@ class UnitCategory {
     required this.defaultToUnitId,
   });
 
+  Color getBadgeColor(bool isDark) {
+    if (isDark) {
+      return iconColor.withValues(alpha: 0.18);
+    }
+    return badgeColor;
+  }
+
   UnitDefinition get defaultFrom =>
       units.firstWhere((u) => u.id == defaultFromUnitId, orElse: () => units[0]);
 

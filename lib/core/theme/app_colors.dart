@@ -55,11 +55,13 @@ class MetricChatColors {
 /// AppColors: Full compatibility with all existing screen references,
 /// re-anchored to True AMOLED Black and Neutral Liquid Glass.
 class AppColors {
-  // Primary & Accents: Neutral white/grey, NO global blue!
-  static const Color primary = Color(0xFFF5F5F5); // Crisp neutral white
-  static const Color primaryLight = Color(0xFFFFFFFF);
-  static const Color primaryDark = Color(0xFFCCCCCC);
+  // Primary & Accents: Adaptive neutral foundation
+  static const Color primary = Color(0xFF0F172A); // High-contrast neutral ink for light mode default
+  static const Color primaryLight = Color(0xFF0F172A); // Dark ink for light mode
+  static const Color primaryDark = Color(0xFFF5F5F5); // Crisp white for dark mode
   static const Color accent = Color(0xFF888888);
+
+  static Color primaryAdaptive(bool isDark) => isDark ? primaryDark : primaryLight;
 
   // True AMOLED Black Backgrounds
   static const Color backgroundLight = Color(0xFFF8F9FE);
@@ -84,40 +86,52 @@ class AppColors {
   static const Color alertRed = Color(0xFFEF4444);
   static const Color warningAmber = Color(0xFFF59E0B);
 
-  // Converter Category Accents (Muted & elegant, avoiding saturated neon or dominant blue)
-  static const Color blueIcon = Color(0xFF9CA3AF);
-  static const Color blueBadge = Color(0xFF161616);
+  // Converter Category Accents (Pastel tints in Light Mode, deep subtle AMOLED tints in Dark Mode)
+  static const Color blueIcon = Color(0xFF64748B);
+  static const Color blueBadge = Color(0xFFF1F5F9);
+  static const Color blueBadgeDark = Color(0xFF161616);
 
   static const Color greenIcon = Color(0xFF10B981);
-  static const Color greenBadge = Color(0xFF101C17);
+  static const Color greenBadge = Color(0xFFE8F5E9);
+  static const Color greenBadgeDark = Color(0xFF101C17);
 
   static const Color redIcon = Color(0xFFF43F5E);
-  static const Color redBadge = Color(0xFF1F1214);
+  static const Color redBadge = Color(0xFFFCE4EC);
+  static const Color redBadgeDark = Color(0xFF1F1214);
 
   static const Color amberIcon = Color(0xFFF59E0B);
-  static const Color amberBadge = Color(0xFF1C170E);
+  static const Color amberBadge = Color(0xFFFFF8E1);
+  static const Color amberBadgeDark = Color(0xFF1C170E);
 
   static const Color purpleIcon = Color(0xFFA855F7);
-  static const Color purpleBadge = Color(0xFF17111E);
+  static const Color purpleBadge = Color(0xFFF3E5F5);
+  static const Color purpleBadgeDark = Color(0xFF17111E);
 
   static const Color tealIcon = Color(0xFF14B8A6);
-  static const Color tealBadge = Color(0xFF0F1918);
+  static const Color tealBadge = Color(0xFFE0F2F1);
+  static const Color tealBadgeDark = Color(0xFF0F1918);
 
   static const Color orangeIcon = Color(0xFFFB923C);
-  static const Color orangeBadge = Color(0xFF1C1510);
+  static const Color orangeBadge = Color(0xFFFFF3E0);
+  static const Color orangeBadgeDark = Color(0xFF1C1510);
 
-  static const Color cyanIcon = Color(0xFF38BDF8);
-  static const Color cyanBadge = Color(0xFF11181D);
+  static const Color cyanIcon = Color(0xFF0284C7);
+  static const Color cyanBadge = Color(0xFFE0F7FA);
+  static const Color cyanBadgeDark = Color(0xFF11181D);
 
-  static const Color violetIcon = Color(0xFFC084FC);
-  static const Color violetBadge = Color(0xFF18121F);
+  static const Color violetIcon = Color(0xFF8B5CF6);
+  static const Color violetBadge = Color(0xFFEDE7F6);
+  static const Color violetBadgeDark = Color(0xFF18121F);
 
   static const Color roseIcon = Color(0xFFFB7185);
-  static const Color roseBadge = Color(0xFF1D1214);
+  static const Color roseBadge = Color(0xFFFFEBEE);
+  static const Color roseBadgeDark = Color(0xFF1D1214);
 
-  static const Color emeraldIcon = Color(0xFF34D399);
-  static const Color emeraldBadge = Color(0xFF0E1A15);
+  static const Color emeraldIcon = Color(0xFF059669);
+  static const Color emeraldBadge = Color(0xFFE8F8F5);
+  static const Color emeraldBadgeDark = Color(0xFF0E1A15);
 
-  static const Color indigoIcon = Color(0xFF818CF8);
-  static const Color indigoBadge = Color(0xFF14141F);
+  static const Color indigoIcon = Color(0xFF6366F1);
+  static const Color indigoBadge = Color(0xFFE8EAF6);
+  static const Color indigoBadgeDark = Color(0xFF14141F);
 }

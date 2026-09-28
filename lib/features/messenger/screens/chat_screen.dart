@@ -95,7 +95,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             Icon(
               isVerified ? Icons.verified_user_rounded : Icons.shield_outlined,
-              color: isVerified ? AppColors.secureGreen : AppColors.primary,
+              color: isVerified ? AppColors.secureGreen : (isDark ? Colors.white : Colors.black87),
               size: 24,
             ),
             const SizedBox(width: 10),
@@ -132,12 +132,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
               child: SelectableText(
                 safetyNumber,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'Courier',
                   fontSize: 17,
                   letterSpacing: 2.0,
                   fontWeight: FontWeight.bold,
-                  color: AppColors.primary,
+                  color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -216,7 +216,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: Row(
                     children: [
-                      const Icon(Icons.timer_outlined, color: AppColors.primary),
+                      Icon(Icons.timer_outlined, color: isDark ? Colors.white : Colors.black87),
                       const SizedBox(width: 10),
                       Text(
                         'Disappearing Messages',
@@ -235,7 +235,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   final isSelected = currentSeconds == seconds;
                   return ListTile(
                     title: Text(opt['label'] as String),
-                    trailing: isSelected ? const Icon(Icons.check, color: AppColors.primary) : null,
+                    trailing: isSelected ? Icon(Icons.check, color: isDark ? Colors.white : Colors.black87) : null,
                     onTap: () async {
                       await SecureKeyStorage.setDisappearingTimerSeconds(seconds);
                       if (ctx.mounted) Navigator.pop(ctx);
@@ -276,7 +276,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(Icons.copy_rounded, color: AppColors.primary),
+                leading: Icon(Icons.copy_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
                 title: const Text('Copy Text'),
                 onTap: () {
                   Clipboard.setData(ClipboardData(text: msg.text));
@@ -802,7 +802,7 @@ class _TextInputBarState extends State<_TextInputBar> {
                 size: 20,
                 color: _hasInputText
                     ? Colors.black
-                    : (isDark ? MetricColors.textMuted : Colors.white70),
+                    : (isDark ? MetricColors.textMuted : Colors.black38),
               ),
               padding: EdgeInsets.zero,
             ),

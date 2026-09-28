@@ -150,6 +150,7 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
           ),
         ),
         child: BottomNavigationBar(
+          backgroundColor: Colors.transparent,
           currentIndex: _currentTabIndex,
           onTap: (index) {
             HapticFeedback.selectionClick();
@@ -378,7 +379,9 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
                       Container(
                         height: 20,
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.25),
+                          color: isDark
+                              ? Colors.white.withValues(alpha: 0.25)
+                              : const Color(0xFFE2E8F0),
                           borderRadius: BorderRadius.circular(5),
                         ),
                       ),
@@ -395,8 +398,13 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
                               decoration: BoxDecoration(
                                 color: i == 7
                                     ? Colors.amber[400]
-                                    : Colors.white.withValues(alpha: 0.85),
+                                    : (isDark
+                                        ? Colors.white.withValues(alpha: 0.85)
+                                        : const Color(0xFFF1F5F9)),
                                 borderRadius: BorderRadius.circular(3),
+                                border: isDark
+                                    ? null
+                                    : Border.all(color: Colors.grey.shade300, width: 0.5),
                               ),
                             );
                           }),
@@ -480,9 +488,7 @@ class _ConverterHomeScreenState extends ConsumerState<ConverterHomeScreen> {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? category.iconColor.withAlpha(46)
-                        : category.badgeColor,
+                    color: category.getBadgeColor(isDark),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(

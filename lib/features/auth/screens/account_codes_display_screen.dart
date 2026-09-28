@@ -39,7 +39,7 @@ class _AccountCodesDisplayScreenState extends State<AccountCodesDisplayScreen> {
             ),
           ],
         ),
-        backgroundColor: AppColors.primary,
+        backgroundColor: const Color(0xFF1E293B),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         duration: const Duration(seconds: 2),

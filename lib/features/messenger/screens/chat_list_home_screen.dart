@@ -236,7 +236,10 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           actions: [
             FilledButton(
               onPressed: () => Navigator.pop(ctx),
-              style: FilledButton.styleFrom(backgroundColor: AppColors.primary),
+              style: FilledButton.styleFrom(
+                backgroundColor: isDark ? Colors.white : Colors.black,
+                foregroundColor: isDark ? Colors.black : Colors.white,
+              ),
               child: const Text('Understood'),
             ),
           ],
@@ -307,9 +310,9 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                             ),
                             Text(
                               'Slot ${_contacts.length + 1} of 5 available',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
-                                color: AppColors.primary,
+                                color: isDark ? Colors.white70 : AppColors.textSecondaryLight,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -356,7 +359,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                        borderSide: BorderSide(color: isDark ? Colors.white : Colors.black, width: 2),
                       ),
                     ),
                     onChanged: (val) {
@@ -435,15 +438,16 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                             }
                           },
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                      backgroundColor: isDark ? Colors.white : Colors.black,
+                      foregroundColor: isDark ? Colors.black : Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                     child: isConnecting
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            child: CircularProgressIndicator(strokeWidth: 2, color: isDark ? Colors.black : Colors.white),
                           )
                         : const Text(
                             'Connect',
@@ -769,77 +773,81 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           width: 1.0,
         ),
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        leading: CircleAvatar(
-          radius: 22,
-          backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade200,
-          child: Text(
-            contact.username.isNotEmpty ? contact.username[0].toUpperCase() : '?',
-            style: TextStyle(
-              color: isDark ? MetricColors.textPrimary : Colors.black87,
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          leading: CircleAvatar(
+            radius: 22,
+            backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade200,
+            child: Text(
+              contact.username.isNotEmpty ? contact.username[0].toUpperCase() : '?',
+              style: TextStyle(
+                color: isDark ? MetricColors.textPrimary : Colors.black87,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
             ),
           ),
-        ),
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(
-              child: Text(
-                contact.username,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (timeStr.isNotEmpty)
-              Text(
-                timeStr,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  contact.username,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-          ],
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            lastText,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 13,
-              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+              if (timeStr.isNotEmpty)
+                Text(
+                  timeStr,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                  ),
+                ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              lastText,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+              ),
             ),
           ),
-        ),
-        trailing: PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert_rounded, size: 20),
-          onSelected: (val) {
-            if (val == 'remove') {
-              _removeContact(contact);
-            }
-          },
-          itemBuilder: (ctx) => [
-            const PopupMenuItem(
-              value: 'remove',
-              child: Row(
-                children: [
-                  Icon(Icons.delete_outline_rounded, color: AppColors.alertRed, size: 20),
-                  SizedBox(width: 8),
-                  Text('Remove Contact', style: TextStyle(color: AppColors.alertRed)),
-                ],
+          trailing: PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded, size: 20),
+            onSelected: (val) {
+              if (val == 'remove') {
+                _removeContact(contact);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'remove',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_outline_rounded, color: AppColors.alertRed, size: 20),
+                    SizedBox(width: 8),
+                    Text('Remove Contact', style: TextStyle(color: AppColors.alertRed)),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
+          onTap: () => _openChat(contact),
         ),
-        onTap: () => _openChat(contact),
       ),
     );
   }
