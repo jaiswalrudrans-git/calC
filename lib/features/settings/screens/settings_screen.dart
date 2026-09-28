@@ -313,6 +313,123 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  void _showGoogleSignInConfigDialog() {
+    const sha1 = '52:E5:ED:46:45:13:78:13:D1:3E:81:FC:9D:3D:B2:76:CE:F4:2C:96';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: isDark ? MetricGlass.border : Colors.black12),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isDark ? MetricGlass.level2 : Colors.grey.shade200,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.cloud_sync_rounded, size: 22),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Google Drive Setup',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Google Sign-In requires your device\'s SHA-1 certificate fingerprint to be registered in your Firebase project (metric-app-af543).',
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: isDark ? MetricColors.textSecondary : Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'YOUR DEVICE SHA-1 FINGERPRINT:',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.8),
+              ),
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: isDark ? MetricGlass.level1 : Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: isDark ? MetricGlass.border : Colors.black12),
+                ),
+                child: const SelectableText(
+                  sha1,
+                  style: TextStyle(fontFamily: 'monospace', fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Clipboard.setData(const ClipboardData(text: sha1));
+                    HapticFeedback.lightImpact();
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(
+                        content: Text('SHA-1 fingerprint copied to clipboard!'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('Copy SHA-1 to Clipboard'),
+                  style: OutlinedButton.styleFrom(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    side: BorderSide(color: isDark ? MetricGlass.border : Colors.black12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Quick Setup in Firebase Console:\n'
+                '1. Go to Firebase Console (metric-app-af543) > Project Settings\n'
+                '2. Under "Your apps" (Android), click "Add fingerprint"\n'
+                '3. Paste this SHA-1 and save\n'
+                '4. In Google Cloud Console, enable "Google Drive API"',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.5,
+                  color: isDark ? MetricColors.textMuted : Colors.grey.shade700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: isDark ? Colors.white : Colors.black,
+              foregroundColor: isDark ? Colors.black : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got It'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -797,6 +914,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('Connected to Google Drive successfully!')),
                           );
+                        } else if (result.isDeveloperError) {
+                          _showGoogleSignInConfigDialog();
                         } else if (result.errorMessage != null) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -850,6 +969,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(content: Text('Connected to Google Drive successfully!')),
                                     );
+                                  } else if (result.isDeveloperError) {
+                                    _showGoogleSignInConfigDialog();
                                   } else if (result.errorMessage != null) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(

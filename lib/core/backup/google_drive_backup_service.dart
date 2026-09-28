@@ -29,15 +29,26 @@ class GoogleAuthClient extends http.BaseClient {
 class GoogleSignInResult {
   final bool success;
   final String? errorMessage;
-  const GoogleSignInResult({required this.success, this.errorMessage});
+  final bool isDeveloperError;
+  const GoogleSignInResult({
+    required this.success,
+    this.errorMessage,
+    this.isDeveloperError = false,
+  });
 }
 
 class GoogleDriveBackupService {
   static final GoogleDriveBackupService instance = GoogleDriveBackupService._internal();
   GoogleDriveBackupService._internal();
 
+  static const String _serverClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+
   final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: [drive.DriveApi.driveFileScope],
+    serverClientId: _serverClientId.isNotEmpty ? _serverClientId : null,
+    scopes: [
+      'email',
+      drive.DriveApi.driveFileScope,
+    ],
   );
 
   final _uuid = const Uuid();
@@ -125,9 +136,16 @@ class GoogleDriveBackupService {
           'message=${e.message} details=${e.details}';
       debugPrint(msg);
       debugPrint('$stack');
+      final isDevError = e.message?.contains('10') == true ||
+          e.message?.contains('ApiException: 10') == true ||
+          e.code.contains('10') ||
+          (e.code == 'sign_in_failed' && (e.message == null || e.message!.contains('10')));
       return GoogleSignInResult(
         success: false,
-        errorMessage: 'Google Sign-In failed (${e.code}): ${e.message}',
+        errorMessage: isDevError
+            ? 'Google Sign-In requires your device SHA-1 fingerprint to be registered in Firebase Console (ApiException 10).'
+            : 'Google Sign-In failed (${e.code}): ${e.message}',
+        isDeveloperError: isDevError,
       );
     } catch (e, stack) {
       debugPrint('[GoogleDrive] Sign-in error: $e\n$stack');

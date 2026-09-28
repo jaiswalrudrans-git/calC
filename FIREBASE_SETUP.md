@@ -43,8 +43,18 @@
 #### For Android:
 1. In Project Settings, click **Add app** → **Android**.
 2. Package name: `com.metric.app.metric`.
-3. Download `google-services.json` and place it in:
+3. **SHA-1 Fingerprint (MANDATORY for Google Sign-In & Google Drive backup)**:
+   - Click **Add fingerprint**
+   - Add your debug keystore SHA-1:
+     `52:E5:ED:46:45:13:78:13:D1:3E:81:FC:9D:3D:B2:76:CE:F4:2C:96`
+   - (Optional) Add SHA-256:
+     `54:E6:47:48:BC:7B:A2:FC:A7:03:45:89:97:27:EC:61:B7:09:67:8C:81:E6:6A:F8:D0:93:93:44:36:43:0C:18`
+4. Download the generated `google-services.json` (which will contain the `oauth_client` array) and place it in:
    `android/app/google-services.json`
+5. Enable the **Google Drive API**:
+   - Go to Google Cloud Console (same project: `metric-app-af543`):
+     https://console.cloud.google.com/apis/library/drive.googleapis.com
+   - Click **Enable**.
 
 #### For iOS:
 1. Click **Add app** → **iOS**.
