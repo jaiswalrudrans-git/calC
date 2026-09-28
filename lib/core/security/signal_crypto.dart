@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'dart:math';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
-import '../config/supabase_config.dart';
+import '../config/firebase_config.dart';
+import '../../features/messenger/models/chat_contact.dart';
+import '../../features/auth/services/account_auth_service.dart';
 import 'auth_service.dart';
 import 'secure_key_storage.dart';
 
@@ -306,7 +309,8 @@ class SignalCryptoService {
   }
 
   /// Connect and establish an encrypted session using the peer's 6-digit Connect Code
-  static Future<void> pairWithConnectCode(
+  /// Strictly capped at a maximum of 5 contacts per user!
+  static Future<ChatContact> pairWithConnectCode(
     String rawCode, {
     String? explicitPeerUid,
     String? explicitPeerPublicKeyHex,
@@ -323,41 +327,65 @@ class SignalCryptoService {
       throw Exception('You cannot connect to your own device code.');
     }
 
+    // 1. STRICT CONTACT LIMIT CHECK: Maximum 5 contacts!
+    final currentContacts = await SecureKeyStorage.getContacts();
+    if (currentContacts.length >= SecureKeyStorage.maxContactsLimit) {
+      throw Exception('Contact limit reached. You can only connect with up to 5 people on the free tier.');
+    }
+
     await ensurePrekeyBundle();
 
-    // 1. Resolve peer UUID and public key bundle
     String resolvedPeerUid = explicitPeerUid ?? '';
     String resolvedPeerPubKey = explicitPeerPublicKeyHex ?? '';
+    String peerUsername = 'Contact ${currentContacts.length + 1}';
 
-    final client = SupabaseConfig.client;
-    if (resolvedPeerUid.isEmpty && client != null && SupabaseConfig.isConfigured) {
+    // 2. Query Firebase Cloud Firestore connect_codes collection
+    final firestore = FirebaseConfig.firestore;
+    if (firestore != null) {
       try {
-        final codeInt = int.tryParse(cleanPeerCode);
-        if (codeInt != null) {
-          final row = await client.from('pairing_exchange').select().eq('code', codeInt).maybeSingle();
-          if (row != null) {
-            resolvedPeerUid = row['uid'] as String? ?? '';
-            final bundleMap = row['public_key_bundle'] as Map<String, dynamic>?;
-            if (bundleMap != null) {
-              resolvedPeerPubKey = bundleMap['identity_key'] as String? ?? '';
-              try {
-                final bundle = PublicKeyBundle.fromJson(bundleMap);
-                await saveRemotePeerBundle(peerUid: resolvedPeerUid, bundle: bundle);
-              } catch (_) {}
-            }
+        final doc = await firestore.collection('connect_codes').doc(cleanPeerCode).get();
+        if (doc.exists) {
+          final data = doc.data()!;
+          resolvedPeerUid = data['uid'] as String? ?? resolvedPeerUid;
+          peerUsername = data['username'] as String? ?? peerUsername;
+          final bundleMap = data['public_key_bundle'] as Map<String, dynamic>?;
+          if (bundleMap != null) {
+            resolvedPeerPubKey = bundleMap['identity_key'] as String? ?? resolvedPeerPubKey;
+            try {
+              final bundle = PublicKeyBundle.fromJson(bundleMap);
+              await saveRemotePeerBundle(peerUid: resolvedPeerUid, bundle: bundle);
+            } catch (_) {}
           }
         }
       } catch (e) {
-        if (kDebugMode) debugPrint('[SignalCrypto] Query peer pairing_exchange error: $e');
+        if (kDebugMode) debugPrint('[SignalCrypto] Firestore connect code lookup notice: $e');
       }
     }
 
     if (resolvedPeerUid.isEmpty) {
-      // Deterministic RFC-4122 v5 UUID based on peer connect code
       resolvedPeerUid = const Uuid().v5(Namespace.url.value, 'metric:connect_code:$cleanPeerCode');
     }
 
-    // 2. Deterministic symmetrical shared key derivation using HKDF from sorted connect codes
+    if (currentContacts.any((c) => c.uid == resolvedPeerUid)) {
+      throw Exception('This contact is already in your contacts list.');
+    }
+
+    // 3. Verify peer hasn't exceeded their 5-contact limit
+    if (firestore != null && resolvedPeerUid.isNotEmpty) {
+      try {
+        final peerDoc = await firestore.collection('users').doc(resolvedPeerUid).get();
+        if (peerDoc.exists) {
+          final peerContacts = peerDoc.data()?['contacts'] as List<dynamic>? ?? [];
+          if (peerContacts.length >= SecureKeyStorage.maxContactsLimit) {
+            throw Exception('The user you are trying to add has reached their maximum limit of 5 contacts.');
+          }
+        }
+      } catch (e) {
+        if (e is Exception && e.toString().contains('maximum limit of 5 contacts')) rethrow;
+      }
+    }
+
+    // 4. Deterministic symmetrical shared key derivation using HKDF from sorted connect codes
     final codes = [cleanMyCode.isNotEmpty ? cleanMyCode : '000000', cleanPeerCode]..sort();
     final combinedKeyInfo = utf8.encode('METRIC_PAIRING_ROOT_${codes[0]}_${codes[1]}');
 
@@ -386,51 +414,79 @@ class SignalCryptoService {
     final sendChain = isFirst ? chain0To1 : chain1To0;
     final recvChain = isFirst ? chain1To0 : chain0To1;
 
-    await SecureKeyStorage.saveRatchetKeys(
+    // Save per-peer ratchet state
+    await SecureKeyStorage.savePeerRatchetKeys(
+      peerUid: resolvedPeerUid,
       rootKeyHex: _bytesToHex(rootKey),
       sendChainKeyHex: _bytesToHex(sendChain),
       recvChainKeyHex: _bytesToHex(recvChain),
     );
 
-    // Save paired peer and peer connect code
     await SecureKeyStorage.savePairedPeer(
       peerUid: resolvedPeerUid,
       peerPublicKeyHex: resolvedPeerPubKey,
     );
     await SecureKeyStorage.savePeerConnectCode(cleanPeerCode);
+
+    final newContact = ChatContact(
+      uid: resolvedPeerUid,
+      username: peerUsername,
+      connectCode: cleanPeerCode,
+      publicKeyHex: resolvedPeerPubKey,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+
+    // Save contact locally (capped at 5)
+    await SecureKeyStorage.addContact(newContact);
+
+    // 5. Update user contacts list in Firebase Cloud Firestore
+    if (firestore != null) {
+      try {
+        final myUid = await AuthService.getOrCreateDeviceUid();
+        final myDoc = await firestore.collection('users').doc(myUid).get();
+        final existingRaw = (myDoc.data()?['contacts'] as List<dynamic>? ?? []);
+        final contactsList = existingRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        if (!contactsList.any((c) => c['uid'] == resolvedPeerUid) && contactsList.length < 5) {
+          contactsList.add(newContact.toMap());
+          await firestore.collection('users').doc(myUid).update({'contacts': contactsList});
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('[SignalCrypto] Sync contacts to Firestore error: $e');
+      }
+    }
+
+    return newContact;
   }
 
-  /// Publish this device's connect code and public key bundle to Supabase pairing_exchange table
+  /// Publish this device's connect code and public key bundle to Firebase Spark (Cloud Firestore)
   static Future<void> publishMyConnectCode() async {
-    final client = SupabaseConfig.client;
-    if (client == null || !SupabaseConfig.isConfigured) return;
+    final firestore = FirebaseConfig.firestore;
+    if (firestore == null) return;
 
     try {
-      // Ensure Supabase auth session is active
-      if (client.auth.currentUser == null) {
-        try {
-          await client.auth.signInAnonymously();
-        } catch (_) {}
-      }
-
-      final myUid = client.auth.currentUser?.id ?? await AuthService.getOrCreateDeviceUid();
+      final myUid = await AuthService.getOrCreateDeviceUid();
       final myCode = await SecureKeyStorage.getMyConnectCode();
       if (myCode == null || myCode.isEmpty) return;
       final cleanCode = myCode.replaceAll(RegExp(r'[^0-9]'), '');
-      final codeInt = int.tryParse(cleanCode);
-      if (codeInt == null) return;
-
-      // Update stored device UID to match auth UID
-      await SecureKeyStorage.saveMyDeviceId(myUid);
+      if (cleanCode.length != 6) return;
 
       final bundle = await getLocalPublicKeyBundle();
-      await client.from('pairing_exchange').upsert({
-        'code': codeInt,
+      final username = await AccountAuthService.getCurrentUsername() ?? 'User';
+
+      await firestore.collection('connect_codes').doc(cleanCode).set({
+        'code': cleanCode,
         'uid': myUid,
+        'username': username,
         'public_key_bundle': bundle.toJson(),
-      });
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      }, SetOptions(merge: true));
+
+      await firestore.collection('users').doc(myUid).set({
+        'public_key_bundle': bundle.toJson(),
+      }, SetOptions(merge: true));
+
       if (kDebugMode) {
-        debugPrint('[SignalCrypto] Published connect code $cleanCode for UID $myUid');
+        debugPrint('[SignalCrypto] Published connect code $cleanCode to Firestore for UID $myUid');
       }
     } catch (e) {
       if (kDebugMode) {
@@ -439,55 +495,12 @@ class SignalCryptoService {
     }
   }
 
-  /// Initiates unilateral pairing: User enters peer's 6-digit code.
-  /// Automatically configures encryption, notifies peer via Realtime beacon,
-  /// and sends an initial handshake so peer auto-connects without needing to enter a code!
-  static Future<void> initiateUnilateralPairing(String targetCode) async {
+  /// Initiates contact pairing: User enters peer's 6-digit code.
+  static Future<ChatContact> initiateUnilateralPairing(String targetCode) async {
     final cleanPeerCode = targetCode.replaceAll(RegExp(r'[^0-9]'), '');
-    await pairWithConnectCode(cleanPeerCode);
+    final contact = await pairWithConnectCode(cleanPeerCode);
     await publishMyConnectCode();
-
-    final client = SupabaseConfig.client;
-    if (client == null || !SupabaseConfig.isConfigured) return;
-
-    try {
-      final myUid = await AuthService.getOrCreateDeviceUid();
-      final myCode = await SecureKeyStorage.getMyConnectCode() ?? '';
-      final cleanMyCode = myCode.replaceAll(RegExp(r'[^0-9]'), '');
-      final peerUid = await SecureKeyStorage.getPairedUid();
-      final myBundle = await getLocalPublicKeyBundle();
-
-      // 1. Broadcast pairing invitation to peer's inbox channel
-      final inboxChannel = client.channel('pairing_inbox_$cleanPeerCode');
-      await inboxChannel.subscribe();
-      await inboxChannel.sendBroadcastMessage(
-        event: 'pairing_invitation',
-        payload: {
-          'sender_code': cleanMyCode,
-          'sender_uid': myUid,
-          'public_key_bundle': myBundle.toJson(),
-        },
-      );
-
-      // 2. Also broadcast on shared channel
-      if (peerUid != null && peerUid.isNotEmpty) {
-        final participants = [myUid, peerUid]..sort();
-        final sharedChannel = client.channel('chat_shared_${participants.join('_')}');
-        await sharedChannel.subscribe();
-        await sharedChannel.sendBroadcastMessage(
-          event: 'pairing_invitation',
-          payload: {
-            'sender_code': cleanMyCode,
-            'sender_uid': myUid,
-            'public_key_bundle': myBundle.toJson(),
-          },
-        );
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[SignalCrypto] Unilateral pairing broadcast notice: $e');
-      }
-    }
+    return contact;
   }
 
   /// Initialize the Double Ratchet state deterministically between two devices.
@@ -717,7 +730,7 @@ class SignalCryptoService {
   }) async {
     await ensurePrekeyBundle();
     final myPrivateHex = await SecureKeyStorage.getIdentityPrivateKey();
-    final peerPublicHex = await SecureKeyStorage.getRemoteIdentityPublicKey();
+    final peerPublicHex = await SecureKeyStorage.getRemoteIdentityPublicKeyForPeer(receiverUid);
 
     final ephemeralKeyPair = await _x25519.newKeyPair();
     final ephemeralPublicKey = await ephemeralKeyPair.extractPublicKey();
@@ -802,7 +815,7 @@ class SignalCryptoService {
     try {
       await ensurePrekeyBundle();
       final myPrivateHex = await SecureKeyStorage.getIdentityPrivateKey();
-      final peerPublicHex = await SecureKeyStorage.getRemoteIdentityPublicKey();
+      final peerPublicHex = await SecureKeyStorage.getRemoteIdentityPublicKeyForPeer(envelope.senderUid);
 
       if (myPrivateHex != null &&
           peerPublicHex != null &&

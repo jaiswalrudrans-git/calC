@@ -2,18 +2,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'core/config/supabase_config.dart';
+import 'core/config/firebase_config.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'core/theme/theme_provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/security/signal_crypto.dart';
 import 'core/security/privacy_guard.dart';
-import 'core/security/secure_key_storage.dart';
 import 'core/backup/google_drive_backup_service.dart';
-import 'features/auth/auth.dart';
 import 'features/converter/screens/converter_home_screen.dart';
-import 'features/messenger/screens/chat_list_home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,14 +42,9 @@ void main() async {
 
 Future<void> _initializeBackgroundServices() async {
   try {
-    if (SupabaseConfig.isConfigured) {
-      await Supabase.initialize(
-        url: SupabaseConfig.url,
-        publishableKey: SupabaseConfig.anonKey,
-      );
-    }
+    await FirebaseConfig.init();
   } catch (e) {
-    debugPrint('[Metric Supabase Init] $e');
+    debugPrint('[Metric Firebase Init] $e');
   }
 
   try {
@@ -89,7 +80,7 @@ class _MetricAppState extends ConsumerState<MetricApp> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.paused) {
       // INSTANT RESET TO DECOY CONVERTER ON HOME / MINIMIZE
       navigatorKey.currentState?.popUntil((route) => route.isFirst);
       PrivacyGuard.markActive();

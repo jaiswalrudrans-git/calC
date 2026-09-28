@@ -1,15 +1,15 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../../core/config/supabase_config.dart';
-import '../../../core/security/auth_service.dart';
+import 'package:intl/intl.dart';
+import '../../../core/database/local_cache.dart';
 import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/services/account_auth_service.dart';
 import '../../converter/screens/converter_home_screen.dart';
 import '../../settings/screens/settings_screen.dart';
+import '../models/chat_contact.dart';
 import 'chat_screen.dart';
 
 class ChatListHomeScreen extends StatefulWidget {
@@ -27,12 +27,9 @@ class ChatListHomeScreen extends StatefulWidget {
 class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
   String? _username;
   String? _connectCode;
-  bool _isPaired = false;
-  String? _peerUid;
+  List<ChatContact> _contacts = [];
+  Map<String, LocalChatMessage?> _lastMessages = {};
   bool _isLoading = true;
-
-  RealtimeChannel? _pairingSubscription;
-  Timer? _inboxPollTimer;
 
   @override
   void initState() {
@@ -40,163 +37,47 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     _loadState();
   }
 
-  @override
-  void dispose() {
-    _inboxPollTimer?.cancel();
-    final client = SupabaseConfig.client;
-    if (client != null && _pairingSubscription != null) {
-      try {
-        client.removeChannel(_pairingSubscription!);
-      } catch (_) {}
-      _pairingSubscription = null;
-    }
-    super.dispose();
-  }
-
   Future<void> _loadState() async {
     final user = await AccountAuthService.getCurrentUsername();
     final code = await AccountAuthService.getCurrentConnectCode();
-    final paired = await SecureKeyStorage.isPaired();
-    final peer = await SecureKeyStorage.getPairedUid();
+    final contactsList = await SecureKeyStorage.getContacts();
+
+    final myUid = await AccountAuthService.getCurrentUserUid();
+    final Map<String, LocalChatMessage?> lastMsgs = {};
+    for (final contact in contactsList) {
+      lastMsgs[contact.uid] = await LocalDatabaseService.getLastMessageForPeer(contact.uid, myUid: myUid);
+    }
 
     if (mounted) {
       setState(() {
         _username = user;
         _connectCode = code;
-        _isPaired = paired;
-        _peerUid = peer;
+        _contacts = contactsList;
+        _lastMessages = lastMsgs;
         _isLoading = false;
       });
     }
 
-    // Publish this device's connect code to Supabase pairing_exchange registry
+    // Publish connect code to Firebase Spark
     if (code.isNotEmpty) {
       unawaited(SignalCryptoService.publishMyConnectCode());
-      _setupPairingInboxListener(code);
     }
-
-    // Check for incoming pairing invitations or pending messages from peers
-    _checkIncomingPairingRequests();
-  }
-
-  void _setupPairingInboxListener(String code) {
-    final cleanCode = code.replaceAll(RegExp(r'[^0-9]'), '');
-    if (cleanCode.length != 6) return;
-
-    final client = SupabaseConfig.client;
-    if (client == null || !SupabaseConfig.isConfigured) return;
-
-    if (_pairingSubscription != null) {
-      try {
-        client.removeChannel(_pairingSubscription!);
-      } catch (_) {}
-      _pairingSubscription = null;
-    }
-
-    final channel = client.channel('pairing_inbox_$cleanCode');
-    _pairingSubscription = channel;
-
-    channel.onBroadcast(
-      event: 'pairing_invitation',
-      callback: (payload) async {
-        final senderCode = payload['sender_code'] as String?;
-        final senderUid = payload['sender_uid'] as String?;
-        final pkBundle = payload['public_key_bundle'] as Map<String, dynamic>?;
-
-        if (senderCode != null && senderCode.isNotEmpty) {
-          await SignalCryptoService.pairWithConnectCode(
-            senderCode,
-            explicitPeerUid: senderUid,
-            explicitPeerPublicKeyHex: pkBundle?['identity_key'] as String?,
-          );
-          if (mounted) {
-            final currentPeer = await SecureKeyStorage.getPairedUid();
-            setState(() {
-              _isPaired = true;
-              _peerUid = currentPeer;
-            });
-            HapticFeedback.mediumImpact();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Row(
-                  children: [
-                    const Icon(Icons.link_rounded, color: Colors.white, size: 20),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text('Device $senderCode connected with you!')),
-                  ],
-                ),
-                backgroundColor: AppColors.secureGreen,
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            );
-          }
-        }
-      },
-    );
-
-    channel.subscribe();
-
-    _inboxPollTimer?.cancel();
-    _inboxPollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (mounted) _checkIncomingPairingRequests();
-    });
-  }
-
-  Future<void> _checkIncomingPairingRequests() async {
-    final client = SupabaseConfig.client;
-    if (client == null || !SupabaseConfig.isConfigured) return;
-
-    try {
-      final myUid = await AuthService.getOrCreateDeviceUid();
-      final paired = await SecureKeyStorage.isPaired();
-
-      if (paired) return;
-
-      final rows = await client
-          .from('messages')
-          .select('sender_uid')
-          .eq('recipient_uid', myUid)
-          .limit(5);
-
-      if (rows.isNotEmpty) {
-        final firstSender = rows.first['sender_uid'] as String?;
-        if (firstSender != null && firstSender.isNotEmpty) {
-          final peRow = await client.from('pairing_exchange').select().eq('uid', firstSender).maybeSingle();
-          if (peRow != null) {
-            final senderCode = peRow['code'].toString();
-            final pkBundle = peRow['public_key_bundle'] as Map<String, dynamic>?;
-            await SignalCryptoService.pairWithConnectCode(
-              senderCode,
-              explicitPeerUid: firstSender,
-              explicitPeerPublicKeyHex: pkBundle?['identity_key'] as String?,
-            );
-            if (mounted) {
-              setState(() {
-                _isPaired = true;
-                _peerUid = firstSender;
-              });
-            }
-          }
-        }
-      }
-    } catch (_) {}
   }
 
   void _copyConnectCode() {
-    if (_connectCode == null) return;
-    HapticFeedback.mediumImpact();
+    if (_connectCode == null || _connectCode!.isEmpty) return;
+    HapticFeedback.lightImpact();
     Clipboard.setData(ClipboardData(text: _connectCode!));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Row(
+        content: Row(
           children: [
-            Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-            SizedBox(width: 10),
-            Text('Connect code copied! Share this with contacts.'),
+            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Text('Connect code $_connectCode copied!'),
           ],
         ),
-        backgroundColor: AppColors.primary,
+        backgroundColor: AppColors.secureGreen,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         duration: const Duration(seconds: 2),
@@ -210,7 +91,6 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
       context,
       MaterialPageRoute(builder: (context) => const SettingsScreen()),
     );
-    // Reload state in case user changed settings or logged out
     final stillLoggedIn = await AccountAuthService.isLoggedIn();
     if (!stillLoggedIn && widget.onLoggedOut != null) {
       widget.onLoggedOut!();
@@ -233,6 +113,37 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
 
   void _showAddContactDialog() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // Strict 5-contact check
+    if (_contacts.length >= SecureKeyStorage.maxContactsLimit) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.people_alt_rounded, color: AppColors.alertRed),
+              SizedBox(width: 10),
+              Text('Contact Limit Reached'),
+            ],
+          ),
+          content: const Text(
+            'You can connect with up to 5 people on the free Spark plan.\n\nTo add a new contact, please remove an existing contact first.',
+            style: TextStyle(fontSize: 14),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.primary),
+              child: const Text('Understood'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     final controller = TextEditingController();
     String? errorMessage;
     bool isConnecting = false;
@@ -291,7 +202,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Join Chat',
+                              'Add Contact',
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w800,
@@ -299,10 +210,11 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                               ),
                             ),
                             Text(
-                              'Enter another device\'s 6-digit Connect Code',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                              'Slot ${_contacts.length + 1} of 5 available',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ],
@@ -310,45 +222,51 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 22),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Enter your friend\'s 6-digit permanent connect code to establish an encrypted Signal chat.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.4,
+                      color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
                   TextField(
                     controller: controller,
                     autofocus: true,
                     keyboardType: TextInputType.number,
                     textAlign: TextAlign.center,
                     maxLength: 7,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9\-]')),
-                    ],
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 4,
-                      fontFamily: 'monospace',
-                      color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 6,
                     ),
                     decoration: InputDecoration(
-                      hintText: '000-000',
                       counterText: '',
+                      hintText: '000-000',
+                      hintStyle: TextStyle(
+                        color: isDark ? Colors.white24 : Colors.black26,
+                        letterSpacing: 6,
+                      ),
                       filled: true,
-                      fillColor: isDark ? Colors.black26 : Colors.grey.shade100,
+                      fillColor: isDark ? const Color(0xFF141724) : const Color(0xFFF1F4F9),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: BorderSide.none,
+                        borderSide: BorderSide(
+                          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                        ),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
                         borderSide: const BorderSide(color: AppColors.primary, width: 2),
                       ),
-                      errorText: errorMessage,
                     ),
                     onChanged: (val) {
-                      if (errorMessage != null) {
-                        setSheetState(() => errorMessage = null);
-                      }
-                      final digits = val.replaceAll(RegExp(r'[^0-9]'), '');
-                      if (digits.length == 6 && !val.contains('-')) {
-                        final formatted = '${digits.substring(0, 3)}-${digits.substring(3, 6)}';
+                      final clean = val.replaceAll(RegExp(r'[^0-9]'), '');
+                      if (clean.length == 6 && !val.contains('-')) {
+                        final formatted = '${clean.substring(0, 3)}-${clean.substring(3, 6)}';
                         controller.value = TextEditingValue(
                           text: formatted,
                           selection: TextSelection.collapsed(offset: formatted.length),
@@ -356,96 +274,86 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                       }
                     },
                   ),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: isConnecting ? null : () => Navigator.pop(ctx),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          ),
-                          child: const Text('Cancel'),
-                        ),
+                  if (errorMessage != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppColors.alertRed.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: isConnecting
-                              ? null
-                              : () async {
-                                  final input = controller.text.trim();
-                                  final digits = input.replaceAll(RegExp(r'[^0-9]'), '');
-                                  if (digits.length != 6) {
-                                    setSheetState(() {
-                                      errorMessage = 'Must be exactly 6 digits';
-                                    });
-                                    HapticFeedback.vibrate();
-                                    return;
-                                  }
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline_rounded, color: AppColors.alertRed, size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              errorMessage!,
+                              style: const TextStyle(color: AppColors.alertRed, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+                  FilledButton(
+                    onPressed: isConnecting
+                        ? null
+                        : () async {
+                            final raw = controller.text.trim();
+                            final clean = raw.replaceAll(RegExp(r'[^0-9]'), '');
+                            if (clean.length != 6) {
+                              setSheetState(() => errorMessage = 'Please enter a valid 6-digit code.');
+                              return;
+                            }
 
-                                  final myCode = _connectCode?.replaceAll(RegExp(r'[^0-9]'), '') ?? '';
-                                  if (myCode.isNotEmpty && myCode == digits) {
-                                    setSheetState(() {
-                                      errorMessage = 'Cannot connect to your own device';
-                                    });
-                                    HapticFeedback.vibrate();
-                                    return;
-                                  }
+                            setSheetState(() {
+                              isConnecting = true;
+                              errorMessage = null;
+                            });
 
-                                  setSheetState(() => isConnecting = true);
-                                  try {
-                                    await SignalCryptoService.initiateUnilateralPairing(digits);
-                                    HapticFeedback.mediumImpact();
-                                    if (context.mounted) {
-                                      Navigator.pop(ctx);
-                                      await _loadState();
-                                      if (mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: Text('Connected to device $input!'),
-                                            backgroundColor: AppColors.secureGreen,
-                                            behavior: SnackBarBehavior.floating,
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(10),
-                                            ),
-                                          ),
-                                        );
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(builder: (context) => const ChatScreen()),
-                                        );
-                                      }
-                                    }
-                                  } catch (e) {
-                                    setSheetState(() {
-                                      errorMessage = e.toString().replaceFirst('Exception: ', '');
-                                      isConnecting = false;
-                                    });
-                                  }
-                                },
-                          icon: isConnecting
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
+                            try {
+                              final contact = await SignalCryptoService.initiateUnilateralPairing(clean);
+                              if (ctx.mounted) Navigator.pop(ctx);
+                              await _loadState();
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Connected with ${contact.username}!'),
+                                    backgroundColor: AppColors.secureGreen,
                                   ),
-                                )
-                              : const Icon(Icons.arrow_forward_rounded, size: 20),
-                          label: Text(isConnecting ? 'Connecting...' : 'Connect'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                );
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ChatScreen(contact: contact),
+                                  ),
+                                ).then((_) => _loadState());
+                              }
+                            } catch (e) {
+                              setSheetState(() {
+                                isConnecting = false;
+                                errorMessage = e.toString().replaceAll('Exception: ', '');
+                              });
+                            }
+                          },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    child: isConnecting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Text(
+                            'Connect',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
-                        ),
-                      ),
-                    ],
                   ),
-                  const SizedBox(height: 8),
                 ],
               ),
             ),
@@ -455,267 +363,389 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     );
   }
 
+  void _removeContact(ChatContact contact) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Remove Contact'),
+        content: Text(
+          'Remove "${contact.username}" from your contacts?\n\nThis will free up a contact slot (Limit: 5 contacts).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await SecureKeyStorage.removeContact(contact.uid);
+              Navigator.pop(ctx);
+              await _loadState();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Removed ${contact.username}')),
+                );
+              }
+            },
+            style: FilledButton.styleFrom(backgroundColor: AppColors.alertRed),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    if (_isLoading) {
-      return Scaffold(
-        backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
-        body: const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
-
     return Scaffold(
-      backgroundColor: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+      backgroundColor: isDark ? const Color(0xFF0F111A) : const Color(0xFFF6F8FC),
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.calculate_outlined),
-          tooltip: 'Return to Unit Converter',
-          onPressed: _returnToDecoy,
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        backgroundColor: isDark ? const Color(0xFF141724) : Colors.white,
+        elevation: 0.5,
+        title: Row(
           children: [
-            const Text(
-              'Chats',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 24),
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.lock_rounded, color: AppColors.primary, size: 20),
             ),
-            if (_username != null && _username!.isNotEmpty)
-              Text(
-                '@$_username',
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Messages',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    '${_contacts.length}/5 Contacts',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: _contacts.length >= 5
+                          ? AppColors.alertRed
+                          : (isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          // Decoy exit button (returns to calculator disguise)
+          IconButton(
+            icon: const Icon(Icons.calculate_outlined),
+            tooltip: 'Return to Calculator',
+            onPressed: _returnToDecoy,
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: _openSettings,
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddContactDialog,
+        backgroundColor: _contacts.length >= 5 ? Colors.grey : AppColors.primary,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.person_add_rounded),
+        label: Text(_contacts.length >= 5 ? '5/5 Limit' : 'Add Contact'),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadState,
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                children: [
+                  // My Connect Code Banner
+                  _buildMyCodeBanner(isDark),
+                  const SizedBox(height: 20),
+
+                  // Contacts Header
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'MY CONTACTS (${_contacts.length}/5)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.1,
+                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                        ),
+                      ),
+                      if (_contacts.length < 5)
+                        Text(
+                          '${5 - _contacts.length} slots left',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.secureGreen,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Empty State or Contact List
+                  if (_contacts.isEmpty)
+                    _buildEmptyState(isDark)
+                  else
+                    ..._contacts.map((contact) => _buildContactCard(contact, isDark)),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildMyCodeBanner(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF141724) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  _username != null && _username!.isNotEmpty
+                      ? 'CONNECT CODE ($_username)'
+                      : 'YOUR CONNECT CODE',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.secureGreen.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.cloud_done_rounded, color: AppColors.secureGreen, size: 12),
+                    SizedBox(width: 4),
+                    Text(
+                      'Firebase Spark',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.secureGreen,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  _connectCode ?? '--- ---',
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 4,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+              IconButton.filledTonal(
+                onPressed: _copyConnectCode,
+                icon: const Icon(Icons.copy_rounded, size: 18),
+                tooltip: 'Copy Code',
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Share this code with friends so they can add you (up to 5 contacts).',
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF141724) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+        ),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.people_outline_rounded, color: AppColors.primary, size: 42),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'No Contacts Yet',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Tap "Add Contact" below and enter a 6-digit Connect Code to start chatting.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContactCard(ChatContact contact, bool isDark) {
+    final lastMsg = _lastMessages[contact.uid];
+    final lastText = lastMsg != null ? lastMsg.text : 'Encrypted conversation ready';
+    final timeStr = lastMsg != null
+        ? DateFormat('hh:mm a').format(DateTime.fromMillisecondsSinceEpoch(lastMsg.timestamp))
+        : '';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF141724) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+        ),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        leading: CircleAvatar(
+          radius: 24,
+          backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+          child: Text(
+            contact.username.isNotEmpty ? contact.username[0].toUpperCase() : '?',
+            style: const TextStyle(
+              color: AppColors.primary,
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+        ),
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(
+                contact.username,
                 style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (timeStr.isNotEmpty)
+              Text(
+                timeStr,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
                 ),
               ),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_rounded),
-            tooltip: 'Enter 6-Digit Connect Code',
-            onPressed: _showAddContactDialog,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings & Profile',
-            onPressed: _openSettings,
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _loadState,
-          child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            children: [
-              // Connect Code Banner
-              if (_connectCode != null)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  margin: const EdgeInsets.only(bottom: 24),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: isDark
-                          ? [const Color(0xFF162345), const Color(0xFF101933)]
-                          : [const Color(0xFFEEF4FF), const Color(0xFFE2EDFF)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: isDark ? const Color(0xFF283B6B) : const Color(0xFFD0E1FD),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary.withValues(alpha: 0.15),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.tag_rounded,
-                                  size: 16,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              const Text(
-                                'YOUR CONNECT CODE',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 1.0,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                            ],
-                          ),
-                          InkWell(
-                            onTap: _copyConnectCode,
-                            borderRadius: BorderRadius.circular(8),
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.copy_rounded, size: 14, color: AppColors.primary),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    'Copy',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.primary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      SelectableText(
-                        _connectCode!,
-                        style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 3.5,
-                          fontFamily: 'monospace',
-                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Share this permanent code with someone you want to chat with.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-              // Existing Active Chat (if paired)
-              if (_isPaired)
-                Material(
-                  color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
-                  borderRadius: BorderRadius.circular(18),
-                  clipBehavior: Clip.antiAlias,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                        color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
-                      ),
-                    ),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      leading: CircleAvatar(
-                        radius: 24,
-                        backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-                        child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 26),
-                      ),
-                      title: Text(
-                        _peerUid != null
-                            ? 'Contact (${_peerUid!.replaceAll('code_', '')})'
-                            : 'Encrypted Contact',
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-                      ),
-                      subtitle: const Text(
-                        'End-to-End Encrypted Channel Active',
-                        style: TextStyle(fontSize: 12, color: AppColors.secureGreen),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const ChatScreen()),
-                        );
-                      },
-                    ),
-                  ),
-                )
-              else
-                // Empty state (no contacts added yet)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 48),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 72,
-                        height: 72,
-                        decoration: BoxDecoration(
-                          color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.04),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.chat_bubble_outline_rounded,
-                          size: 36,
-                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        'No Conversations Yet',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Your encrypted chat list will appear here once contacts connect with your Connect Code.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 13,
-                          height: 1.4,
-                          color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      FilledButton.icon(
-                        onPressed: _showAddContactDialog,
-                        icon: const Icon(Icons.add_rounded),
-                        label: const Text('Enter 6-Digit Connect Code'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            lastText,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+            ),
           ),
         ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddContactDialog,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Connect', style: TextStyle(fontWeight: FontWeight.w700)),
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
+        trailing: PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert_rounded, size: 20),
+          onSelected: (val) {
+            if (val == 'remove') {
+              _removeContact(contact);
+            }
+          },
+          itemBuilder: (ctx) => [
+            const PopupMenuItem(
+              value: 'remove',
+              child: Row(
+                children: [
+                  Icon(Icons.delete_outline_rounded, color: AppColors.alertRed, size: 20),
+                  SizedBox(width: 8),
+                  Text('Remove Contact', style: TextStyle(color: AppColors.alertRed)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatScreen(contact: contact),
+            ),
+          ).then((_) => _loadState());
+        },
       ),
     );
   }

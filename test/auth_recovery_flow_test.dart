@@ -263,7 +263,12 @@ void main() {
 
       // Verify paired state
       expect(await SecureKeyStorage.isPaired(), isTrue);
-      expect(await SecureKeyStorage.getPairedUid(), 'code_987654');
+      final pairedUid = await SecureKeyStorage.getPairedUid();
+      expect(pairedUid, isNotNull);
+      expect(pairedUid!.isNotEmpty, isTrue);
+      final contacts = await SecureKeyStorage.getContacts();
+      expect(contacts.length, 1);
+      expect(contacts.first.connectCode, '987654');
       expect(await SecureKeyStorage.getRootKey(), isNotNull);
       expect(await SecureKeyStorage.getSendChainKey(), isNotNull);
       expect(await SecureKeyStorage.getRecvChainKey(), isNotNull);

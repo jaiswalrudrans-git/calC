@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
-import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
@@ -22,41 +21,12 @@ class EncryptedMediaPayload {
   });
 }
 
+/// AES-256-GCM encryption service used for secure vault database backup payloads
 class MediaCryptoService {
   static final _aesGcm = AesGcm.with256bits();
   static final _random = Random.secure();
 
-  /// Strip all EXIF metadata and compress image to max dimensions & quality
-  static Future<Uint8List> stripExifAndCompress(
-    Uint8List rawBytes, {
-    int maxWidth = 1280,
-    int maxHeight = 1280,
-    int quality = 80,
-  }) async {
-    try {
-      final decoded = img.decodeImage(rawBytes);
-      if (decoded == null) return rawBytes;
-
-      // Ensure orientation is baked in and stripped from EXIF
-      img.Image processed = img.bakeOrientation(decoded);
-
-      if (processed.width > maxWidth || processed.height > maxHeight) {
-        if (processed.width >= processed.height) {
-          processed = img.copyResize(processed, width: maxWidth);
-        } else {
-          processed = img.copyResize(processed, height: maxHeight);
-        }
-      }
-
-      // Encoding to fresh JPEG completely strips EXIF GPS, timestamps, camera IDs
-      final cleanJpeg = img.encodeJpg(processed, quality: quality);
-      return Uint8List.fromList(cleanJpeg);
-    } catch (_) {
-      return rawBytes;
-    }
-  }
-
-  /// Encrypt media bytes using AES-256-GCM with a newly generated ephemeral key
+  /// Encrypt arbitrary bytes using AES-256-GCM with a newly generated ephemeral key
   static Future<EncryptedMediaPayload> encryptMediaBytes(Uint8List rawBytes) async {
     // 1. Generate 256-bit AES key & 12-byte IV
     final keyBytes = Uint8List(32);
@@ -86,7 +56,7 @@ class MediaCryptoService {
     );
   }
 
-  /// Decrypt media bytes using AES-256-GCM
+  /// Decrypt bytes using AES-256-GCM
   static Future<Uint8List> decryptMediaBytes(
     Uint8List ciphertext, {
     required String keyHex,
@@ -112,17 +82,17 @@ class MediaCryptoService {
     return Uint8List.fromList(decrypted);
   }
 
-  /// Get the app's private sandboxed directory for encrypted vault media
+  /// Get the app's private sandboxed directory
   static Future<Directory> getSandboxMediaDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final vaultDir = Directory(p.join(docsDir.path, 'vault_media'));
+    final vaultDir = Directory(p.join(docsDir.path, 'vault_storage'));
     if (!await vaultDir.exists()) {
       await vaultDir.create(recursive: true);
     }
     return vaultDir;
   }
 
-  /// Save decrypted media into private app sandbox
+  /// Save bytes into private app sandbox
   static Future<String> saveToSandbox(Uint8List decryptedBytes, String filename) async {
     final dir = await getSandboxMediaDirectory();
     final filePath = p.join(dir.path, filename);

@@ -379,6 +379,72 @@ class LocalDatabaseService {
     return maps.map((m) => LocalChatMessage.fromMap(m)).toList();
   }
 
+  static Future<List<LocalChatMessage>> getMessagesForPeer(String peerUid, {String? myUid}) async {
+    final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.delete('messages', where: 'expiresAt IS NOT NULL AND expiresAt < ?', whereArgs: [now]);
+
+    final List<Map<String, dynamic>> maps = await db.query(
+      'messages',
+      where: 'senderUid = ? OR receiverUid = ?',
+      whereArgs: [peerUid, peerUid],
+      orderBy: 'timestamp ASC',
+    );
+    return maps.map((m) {
+      final sender = m['senderUid'] as String;
+      final isMe = (myUid != null && myUid.isNotEmpty)
+          ? sender == myUid
+          : (m['isMe'] as int) == 1;
+      return LocalChatMessage(
+        id: m['id'] as String,
+        senderUid: sender,
+        receiverUid: m['receiverUid'] as String,
+        text: m['text'] as String,
+        timestamp: m['timestamp'] as int,
+        expiresAt: m['expiresAt'] as int?,
+        isMe: isMe,
+        status: m['status'] as String? ?? 'sent',
+        mediaType: m['mediaType'] as String?,
+        localPath: m['localPath'] as String?,
+        mediaSize: (m['mediaSize'] as num?)?.toInt(),
+        duration: (m['duration'] as num?)?.toInt(),
+        reaction: m['reaction'] as String?,
+      );
+    }).toList();
+  }
+
+  static Future<LocalChatMessage?> getLastMessageForPeer(String peerUid, {String? myUid}) async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'messages',
+      where: 'senderUid = ? OR receiverUid = ?',
+      whereArgs: [peerUid, peerUid],
+      orderBy: 'timestamp DESC',
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    final m = maps.first;
+    final sender = m['senderUid'] as String;
+    final isMe = (myUid != null && myUid.isNotEmpty)
+        ? sender == myUid
+        : (m['isMe'] as int) == 1;
+    return LocalChatMessage(
+      id: m['id'] as String,
+      senderUid: sender,
+      receiverUid: m['receiverUid'] as String,
+      text: m['text'] as String,
+      timestamp: m['timestamp'] as int,
+      expiresAt: m['expiresAt'] as int?,
+      isMe: isMe,
+      status: m['status'] as String? ?? 'sent',
+      mediaType: m['mediaType'] as String?,
+      localPath: m['localPath'] as String?,
+      mediaSize: (m['mediaSize'] as num?)?.toInt(),
+      duration: (m['duration'] as num?)?.toInt(),
+      reaction: m['reaction'] as String?,
+    );
+  }
+
   static Future<void> updateMessageStatus(String messageId, String status) async {
     final db = await database;
     if (status == 'delivered') {

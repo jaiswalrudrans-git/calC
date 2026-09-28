@@ -1,27 +1,20 @@
 import 'dart:async';
-import 'dart:io';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:record/record.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/security/privacy_guard.dart';
+import '../../../core/security/secure_key_storage.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/backup/google_drive_backup_service.dart';
-import '../../gallery/screens/fullscreen_media_gallery_viewer.dart';
-import '../../gallery/screens/shared_gallery_screen.dart';
 import '../../settings/screens/settings_screen.dart';
+import '../models/chat_contact.dart';
 import '../providers/chat_provider.dart';
-import '../widgets/voice_bubble_widget.dart';
-import 'image_viewer_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key});
+  final ChatContact? contact;
+
+  const ChatScreen({super.key, this.contact});
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -31,18 +24,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _inputFocusNode = FocusNode();
-  final AudioRecorder _audioRecorder = AudioRecorder();
 
   bool _isSearching = false;
   String _searchQuery = '';
   String? _highlightedMessageId;
   Timer? _highlightTimer;
-  bool _isRecordingVoice = false;
-  String? _recordFilePath;
-  Timer? _recordDurationTimer;
-  int _recordSeconds = 0;
   int _previousMessageCount = 0;
-
   ChatNotifier? _chatNotifier;
 
   @override
@@ -51,751 +38,212 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _chatNotifier = ref.read(chatProvider.notifier);
     PrivacyGuard.setScreenProtection(true);
 
-    // Notify provider that chat is currently active/open (triggers blue ticks on peer device!)
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.contact != null) {
+        _chatNotifier?.setActivePeer(
+          widget.contact!.uid,
+          contactName: widget.contact!.username,
+        );
+      }
       _chatNotifier?.setChatActive(true);
     });
 
     _searchController.addListener(() {
       setState(() => _searchQuery = _searchController.text.trim().toLowerCase());
     });
-
-    // Auto-scroll when keyboard opens so recent messages stay visible above keyboard
-    _inputFocusNode.addListener(() {
-      if (_inputFocusNode.hasFocus) {
-        Future.delayed(const Duration(milliseconds: 100), () {
-          if (mounted) _scrollToBottom(animate: true);
-        });
-        Future.delayed(const Duration(milliseconds: 300), () {
-          if (mounted) _scrollToBottom(animate: true);
-        });
-      }
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollToBottom(animate: false);
-    });
   }
 
   @override
   void dispose() {
-    _chatNotifier?.setChatActive(false);
+    _highlightTimer?.cancel();
     _searchController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
-    _recordDurationTimer?.cancel();
-    _highlightTimer?.cancel();
-    _audioRecorder.dispose();
-    PrivacyGuard.setScreenProtection(false);
+    _chatNotifier?.setChatActive(false);
     super.dispose();
   }
 
-  void _scrollToBottom({bool animate = true}) {
-    if (!_scrollController.hasClients) return;
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    if (animate) {
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
       _scrollController.animateTo(
-        maxScroll,
-        duration: const Duration(milliseconds: 250),
+        _scrollController.position.maxScrollExtent + 60,
+        duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
-    } else {
-      _scrollController.jumpTo(maxScroll);
     }
   }
 
-  void _scrollToAndHighlightMessage(String messageId) {
-    final messages = ref.read(chatProvider).messages;
-    final index = messages.indexWhere((m) => m.id == messageId);
-    if (index == -1) return;
-
-    setState(() {
-      _highlightedMessageId = messageId;
-    });
-
-    HapticFeedback.mediumImpact();
-
-    _highlightTimer?.cancel();
-    _highlightTimer = Timer(const Duration(milliseconds: 2500), () {
-      if (mounted) {
-        setState(() => _highlightedMessageId = null);
-      }
-    });
-
-    if (_scrollController.hasClients) {
-      final maxScroll = _scrollController.position.maxScrollExtent;
-      final targetScroll = (index / (messages.isEmpty ? 1 : messages.length)) * maxScroll;
-      _scrollController.animateTo(
-        targetScroll.clamp(0.0, maxScroll),
-        duration: const Duration(milliseconds: 350),
-        curve: Curves.easeInOut,
-      );
-    }
-  }
-
-  void _maybePromptDriveBackup() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        GoogleDriveBackupService.instance.checkAndPromptFirstMediaAuth(context);
-      }
-    });
-  }
-
-  void _sendMessage(String text) {
-    final clean = text.trim();
-    if (clean.isEmpty) return;
-
-    final state = ref.read(chatProvider);
-    if (state.peerUid == null || state.peerUid!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot send: Device is not paired with a peer. Pair first.'),
-          backgroundColor: AppColors.alertRed,
-        ),
-      );
-      return;
-    }
-
-    HapticFeedback.lightImpact();
-    ref.read(chatProvider.notifier).sendMessage(clean);
-
-    Future.delayed(const Duration(milliseconds: 80), () {
-      _scrollToBottom();
-    });
-  }
-
-  Future<void> _startVoiceRecord() async {
-    try {
-      final hasPermission = await _audioRecorder.hasPermission();
-      if (!hasPermission) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Microphone permission required to record voice notes')),
-          );
-        }
-        return;
-      }
-
-      final tempDir = await getTemporaryDirectory();
-      final filePath = p.join(
-        tempDir.path,
-        'rec_${DateTime.now().millisecondsSinceEpoch}.m4a',
-      );
-      _recordFilePath = filePath;
-
-      await _audioRecorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 64000,
-          sampleRate: 44100,
-        ),
-        path: filePath,
-      );
-
-      HapticFeedback.heavyImpact();
-      setState(() {
-        _isRecordingVoice = true;
-        _recordSeconds = 0;
-      });
-
-      _recordDurationTimer?.cancel();
-      _recordDurationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (mounted) {
-          setState(() => _recordSeconds++);
-        }
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not start voice recording: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _stopVoiceRecordAndSend() async {
-    _recordDurationTimer?.cancel();
-    HapticFeedback.mediumImpact();
-
-    final duration = _recordSeconds;
-    final wasRecording = _isRecordingVoice;
-
-    setState(() {
-      _isRecordingVoice = false;
-      _recordSeconds = 0;
-    });
-
-    if (wasRecording) {
-      try {
-        final path = await _audioRecorder.stop();
-        final finalPath = path ?? _recordFilePath;
-        if (duration >= 1 && finalPath != null) {
-          final file = File(finalPath);
-          if (await file.exists()) {
-            final bytes = await file.readAsBytes();
-            final fileName = 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-            await ref.read(chatProvider.notifier).sendMediaMessage(
-              rawBytes: bytes,
-              mediaType: 'voice',
-              fileName: fileName,
-              duration: duration,
-            );
-            _maybePromptDriveBackup();
-            Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
-          }
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to process voice note: $e')),
-          );
-        }
-      }
-    }
-  }
-
-  Future<void> _cancelVoiceRecord() async {
-    _recordDurationTimer?.cancel();
-    HapticFeedback.vibrate();
-    setState(() {
-      _isRecordingVoice = false;
-      _recordSeconds = 0;
-    });
-
-    try {
-      final path = await _audioRecorder.stop();
-      final finalPath = path ?? _recordFilePath;
-      if (finalPath != null) {
-        final file = File(finalPath);
-        if (await file.exists()) {
-          await file.delete();
-        }
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _pickAndSendCamera() async {
-    try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(
-        source: ImageSource.camera,
-        maxWidth: 1920,
-        maxHeight: 1920,
-        imageQuality: 85,
-      );
-      if (picked == null) return;
-
-      final bytes = await picked.readAsBytes();
-      final fileName = p.basename(picked.path);
-
-      await ref.read(chatProvider.notifier).sendMediaMessage(
-        rawBytes: bytes,
-        mediaType: 'image',
-        fileName: fileName,
-      );
-      _maybePromptDriveBackup();
-      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to capture photo: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _pickAndSendGallery() async {
-    try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1920,
-        maxHeight: 1920,
-        imageQuality: 85,
-      );
-      if (picked == null) return;
-
-      final bytes = await picked.readAsBytes();
-      final fileName = p.basename(picked.path);
-
-      await ref.read(chatProvider.notifier).sendMediaMessage(
-        rawBytes: bytes,
-        mediaType: 'image',
-        fileName: fileName,
-      );
-      _maybePromptDriveBackup();
-      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to select image: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _pickAndSendVideo(ImageSource source) async {
-    try {
-      final picker = ImagePicker();
-      final picked = await picker.pickVideo(source: source);
-      if (picked == null) return;
-
-      final bytes = await picked.readAsBytes();
-      await ref.read(chatProvider.notifier).sendMediaMessage(
-        rawBytes: bytes,
-        mediaType: 'video',
-        fileName: p.basename(picked.path),
-      );
-      _maybePromptDriveBackup();
-      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send video: $e')),
-        );
-      }
-    }
-  }
-
-  void _showMediaPickerOptions({required bool isCamera}) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: Icon(isCamera ? Icons.camera_alt_rounded : Icons.photo_library_rounded),
-              title: Text(isCamera ? 'Take Photo' : 'Photo Gallery'),
-              onTap: () {
-                Navigator.pop(ctx);
-                if (isCamera) {
-                  _pickAndSendCamera();
-                } else {
-                  _pickAndSendGallery();
-                }
-              },
-            ),
-            ListTile(
-              leading: Icon(isCamera ? Icons.videocam_rounded : Icons.video_library_rounded),
-              title: Text(isCamera ? 'Record Video' : 'Video Gallery'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendVideo(isCamera ? ImageSource.camera : ImageSource.gallery);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _pickAndSendDocument() async {
-    try {
-      final files = await FilePicker.pickFiles(type: FileType.any);
-      if (files.isEmpty) return;
-
-      final picked = files.first;
-      final bytes = await picked.xFile.readAsBytes();
-
-      await ref.read(chatProvider.notifier).sendMediaMessage(
-        rawBytes: bytes,
-        mediaType: 'document',
-        fileName: picked.name,
-      );
-      _maybePromptDriveBackup();
-      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to select document: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _pickAndSendAudio() async {
-    try {
-      final files = await FilePicker.pickFiles(type: FileType.audio);
-      if (files.isEmpty) return;
-
-      final picked = files.first;
-      final bytes = await picked.xFile.readAsBytes();
-
-      await ref.read(chatProvider.notifier).sendMediaMessage(
-        rawBytes: bytes,
-        mediaType: 'voice',
-        fileName: picked.name,
-      );
-      _maybePromptDriveBackup();
-      Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to select audio: $e')),
-        );
-      }
-    }
-  }
-
-  void _showAttachmentSheet() {
-    HapticFeedback.lightImpact();
+  void _showSafetyNumberDialog(BuildContext context, ChatState chatState) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final safetyNumber = chatState.safetyNumber ?? 'Unavailable';
+    final isVerified = chatState.isVerified;
 
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E2235) : Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
           children: [
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white24 : Colors.black12,
-                borderRadius: BorderRadius.circular(2),
+            Icon(
+              isVerified ? Icons.verified_user_rounded : Icons.shield_outlined,
+              color: isVerified ? AppColors.secureGreen : AppColors.primary,
+              size: 24,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              'Safety Number',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
               ),
             ),
-            const SizedBox(height: 20),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Compare this number with your contact on an independent channel to verify end-to-end encryption.',
+              style: TextStyle(
+                fontSize: 13,
+                color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF141724) : const Color(0xFFF1F4F9),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isDark ? AppColors.cardBorderDark : AppColors.cardBorderLight,
+                ),
+              ),
+              child: SelectableText(
+                safetyNumber,
+                style: const TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 17,
+                  letterSpacing: 2.0,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 12),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildAttachmentOption(
-                  icon: Icons.insert_drive_file_rounded,
-                  label: 'Document',
-                  color: AppColors.purpleIcon,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _pickAndSendDocument();
-                  },
+                Icon(
+                  isVerified ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+                  size: 16,
+                  color: isVerified ? AppColors.secureGreen : AppColors.textMutedLight,
                 ),
-                _buildAttachmentOption(
-                  icon: Icons.camera_alt_rounded,
-                  label: 'Camera',
-                  color: AppColors.roseIcon,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showMediaPickerOptions(isCamera: true);
-                  },
-                ),
-                _buildAttachmentOption(
-                  icon: Icons.photo_library_rounded,
-                  label: 'Gallery',
-                  color: AppColors.blueIcon,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showMediaPickerOptions(isCamera: false);
-                  },
-                ),
-                _buildAttachmentOption(
-                  icon: Icons.headphones_rounded,
-                  label: 'Audio',
-                  color: AppColors.orangeIcon,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _pickAndSendAudio();
-                  },
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    isVerified ? 'Marked as verified' : 'Not yet marked as verified',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isVerified ? AppColors.secureGreen : AppColors.textMutedLight,
+                    ),
+                  ),
                 ),
               ],
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildAttachmentOption({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: color, size: 26),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _onMenuSelected(String value) async {
-    switch (value) {
-      case 'search':
-        setState(() {
-          _isSearching = true;
-        });
-        break;
-      case 'clear_chat':
-        _showClearChatDialog();
-        break;
-      case 'view_media':
-        final targetMessageId = await Navigator.push<String>(
-          context,
-          MaterialPageRoute(builder: (context) => const SharedGalleryScreen()),
-        );
-        if (targetMessageId != null && mounted) {
-          _scrollToAndHighlightMessage(targetMessageId);
-        }
-        break;
-      case 'export_chat':
-        _showExportChatDialog();
-        break;
-      case 'switch_converter':
-        Navigator.pop(context);
-        break;
-      case 'settings':
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => const SettingsScreen()),
-        );
-        break;
-    }
-  }
-
-  void _showClearChatDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Clear Chat History?'),
-        content: const Text(
-          'This will purge all local decrypted messages on this device. Future messages will continue to be encrypted via your active Signal session.',
-        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await ref.read(chatProvider.notifier).clearAllMessages();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Chat history cleared')),
-                );
-              }
-            },
-            child: const Text('Clear Chat', style: TextStyle(color: AppColors.alertRed, fontWeight: FontWeight.bold)),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
           ),
-        ],
-      ),
-    );
-  }
-
-  void _showExportChatDialog() {
-    final messages = ref.read(chatProvider).messages;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Export Encrypted Archive'),
-        content: Text(
-          'Archive contains ${messages.length} messages.\n\nAll exported records are cryptographic zero-knowledge ciphertext with sender UIDs and timestamps.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
           FilledButton.icon(
             onPressed: () {
+              ref.read(chatProvider.notifier).toggleSafetyVerification();
               Navigator.pop(ctx);
-              Clipboard.setData(ClipboardData(
-                text: messages.map((m) => '[${m.timestamp}] ${m.isMe ? "ME" : "PEER"}: ${m.text}').join('\n'),
-              ));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Decrypted transcript copied to secure clipboard')),
-              );
             },
-            icon: const Icon(Icons.copy_rounded, size: 16),
-            label: const Text('Copy Transcript'),
+            icon: Icon(isVerified ? Icons.cancel_outlined : Icons.check_circle_outline),
+            label: Text(isVerified ? 'Unverify' : 'Mark Verified'),
+            style: FilledButton.styleFrom(
+              backgroundColor: isVerified ? Colors.redAccent : AppColors.secureGreen,
+            ),
           ),
         ],
       ),
     );
   }
 
-  void _showVerificationSheet(BuildContext context, ChatState state, bool isDark) {
+  void _showDisappearingTimerDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final options = [
+      {'label': 'Off', 'seconds': 0},
+      {'label': '30 seconds', 'seconds': 30},
+      {'label': '5 minutes', 'seconds': 300},
+      {'label': '1 hour', 'seconds': 3600},
+      {'label': '24 hours', 'seconds': 86400},
+    ];
+
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: isDark ? AppColors.surfaceDark : Colors.white,
+      backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => Consumer(
-        builder: (context, ref, _) {
-          final liveState = ref.watch(chatProvider);
+      builder: (ctx) => FutureBuilder<int?>(
+        future: SecureKeyStorage.getDisappearingTimerSeconds(),
+        builder: (context, snapshot) {
+          final currentSeconds = snapshot.data ?? 0;
           return Padding(
-            padding: EdgeInsets.only(
-              left: 24,
-              right: 24,
-              top: 20,
-              bottom: MediaQuery.of(context).viewInsets.bottom + 28,
-            ),
+            padding: const EdgeInsets.symmetric(vertical: 20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Handle bar
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(height: 18),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      liveState.isVerified ? Icons.verified_user_rounded : Icons.shield_rounded,
-                      color: liveState.isVerified ? AppColors.secureGreen : AppColors.primary,
-                      size: 26,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Connection Security & ID Verification',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'End-to-End Encrypted via Signal Protocol',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                  ),
-                ),
-                const SizedBox(height: 18),
-
-                // 12-Digit Safety Number Card
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF132A22) : const Color(0xFFE8F5E9),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.secureGreen.withValues(alpha: 0.4)),
-                  ),
-                  child: Column(
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
                     children: [
-                      const Text(
-                        '12-DIGIT SAFETY NUMBER',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.0,
-                          color: AppColors.secureGreen,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      SelectableText(
-                        liveState.safetyNumber ?? 'Generating...',
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 3.5,
-                          fontFamily: 'monospace',
-                          color: AppColors.secureGreen,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
+                      const Icon(Icons.timer_outlined, color: AppColors.primary),
+                      const SizedBox(width: 10),
                       Text(
-                        'Speak out or compare this number with your peer. If identical, you have mathematical proof that you are connected directly with zero eavesdropping.',
-                        textAlign: TextAlign.center,
+                        'Disappearing Messages',
                         style: TextStyle(
-                          fontSize: 11,
-                          height: 1.3,
-                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
-
-                // Device ID Details
-                _buildIdRow(
-                  label: 'MY DEVICE ID',
-                  id: liveState.myUid,
-                  isDark: isDark,
-                  onCopy: () {
-                    Clipboard.setData(ClipboardData(text: liveState.myUid));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('My Device ID copied to clipboard'), duration: Duration(seconds: 1)),
-                    );
-                  },
-                ),
-                const SizedBox(height: 10),
-                _buildIdRow(
-                  label: 'CONNECTED PEER ID',
-                  id: liveState.peerUid ?? 'Not Paired',
-                  isDark: isDark,
-                  isPeer: true,
-                  onCopy: liveState.peerUid != null
-                      ? () {
-                          Clipboard.setData(ClipboardData(text: liveState.peerUid!));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Peer Device ID copied to clipboard'), duration: Duration(seconds: 1)),
-                          );
-                        }
-                      : null,
-                ),
-                const SizedBox(height: 20),
-
-                // Verification Toggle Button
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: FilledButton.icon(
-                    onPressed: () {
-                      HapticFeedback.mediumImpact();
-                      ref.read(chatProvider.notifier).toggleSafetyVerification();
+                const SizedBox(height: 12),
+                ...options.map((opt) {
+                  final seconds = opt['seconds'] as int;
+                  final isSelected = currentSeconds == seconds;
+                  return ListTile(
+                    title: Text(opt['label'] as String),
+                    trailing: isSelected ? const Icon(Icons.check, color: AppColors.primary) : null,
+                    onTap: () async {
+                      await SecureKeyStorage.setDisappearingTimerSeconds(seconds);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(seconds == 0
+                                ? 'Disappearing messages turned off'
+                                : 'Messages will self-destruct after ${opt['label']}'),
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      }
                     },
-                    icon: Icon(
-                      liveState.isVerified ? Icons.check_circle_rounded : Icons.verified_outlined,
-                      size: 20,
-                    ),
-                    label: Text(
-                      liveState.isVerified ? 'Marked as Verified Partner ✓' : 'Mark Partner as Verified',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: liveState.isVerified ? AppColors.secureGreen : AppColors.primary,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                ),
+                  );
+                }),
               ],
             ),
           );
@@ -804,559 +252,360 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  Widget _buildIdRow({
-    required String label,
-    required String id,
-    required bool isDark,
-    bool isPeer = false,
-    VoidCallback? onCopy,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E2235) : const Color(0xFFF1F4F9),
-        borderRadius: BorderRadius.circular(12),
+  void _onMessageLongPress(LocalChatMessage msg) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.5,
-                    color: isPeer ? AppColors.secureGreen : AppColors.primary,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                SelectableText(
-                  id,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w600,
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                  ),
-                ),
-              ],
-            ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.copy_rounded, color: AppColors.primary),
+                title: const Text('Copy Text'),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: msg.text));
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Message copied to clipboard')),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded, color: AppColors.alertRed),
+                title: const Text('Delete Message', style: TextStyle(color: AppColors.alertRed)),
+                onTap: () {
+                  ref.read(chatProvider.notifier).deleteMessage(msg.id);
+                  Navigator.pop(ctx);
+                },
+              ),
+            ],
           ),
-          if (onCopy != null)
-            IconButton(
-              icon: const Icon(Icons.copy_rounded, size: 16),
-              tooltip: 'Copy',
-              onPressed: onCopy,
-            ),
-        ],
+        ),
       ),
     );
-  }
-
-  String _formatDateSeparator(int timestamp) {
-    final msgDate = DateTime.fromMillisecondsSinceEpoch(timestamp);
-    final now = DateTime.now();
-
-    final isToday = msgDate.year == now.year && msgDate.month == now.month && msgDate.day == now.day;
-    if (isToday) return 'Today';
-
-    final yesterday = now.subtract(const Duration(days: 1));
-    final isYesterday = msgDate.year == yesterday.year && msgDate.month == yesterday.month && msgDate.day == yesterday.day;
-    if (isYesterday) return 'Yesterday';
-
-    if (msgDate.year == now.year) {
-      return DateFormat('EEEE, MMMM d').format(msgDate);
-    }
-    return DateFormat('MMMM d, yyyy').format(msgDate);
-  }
-
-  bool _isDifferentDay(int t1, int t2) {
-    final d1 = DateTime.fromMillisecondsSinceEpoch(t1);
-    final d2 = DateTime.fromMillisecondsSinceEpoch(t2);
-    return d1.year != d2.year || d1.month != d2.month || d1.day != d2.day;
   }
 
   @override
   Widget build(BuildContext context) {
+    final chatState = ref.watch(chatProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final state = ref.watch(chatProvider);
 
-    // Auto-scroll when new messages arrive
-    if (state.messages.length > _previousMessageCount) {
-      _previousMessageCount = state.messages.length;
+    final displayName = widget.contact?.username ??
+        chatState.peerName ??
+        (chatState.peerUid != null && chatState.peerUid!.length >= 8
+            ? 'Peer ${chatState.peerUid!.substring(0, 6)}'
+            : 'Encrypted Chat');
+
+    // Auto-scroll on new incoming message
+    if (chatState.messages.length > _previousMessageCount) {
+      _previousMessageCount = chatState.messages.length;
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
 
     final filteredMessages = _searchQuery.isEmpty
-        ? state.messages
-        : state.messages.where((m) => m.text.toLowerCase().contains(_searchQuery)).toList();
+        ? chatState.messages
+        : chatState.messages.where((m) => m.text.toLowerCase().contains(_searchQuery)).toList();
 
-    return PopScope(
-      canPop: true,
-      onPopInvokedWithResult: (didPop, result) {
-        if (didPop) {
-          ref.read(chatProvider.notifier).setChatActive(false);
-        }
-      },
-      child: Scaffold(
-        resizeToAvoidBottomInset: true,
-        backgroundColor: isDark ? const Color(0xFF0C0E14) : const Color(0xFFEFEAE2),
-        appBar: _isSearching ? _buildSearchAppBar(isDark) : _buildMainAppBar(context, state, isDark),
-        body: Column(
-          children: [
-            // Warning Banner if Not Paired
-            if (state.peerUid == null || state.peerUid!.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                color: AppColors.warningAmber.withValues(alpha: 0.15),
-                child: Row(
-                  children: [
-                    const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warningAmber),
-                    const SizedBox(width: 10),
-                    const Expanded(
-                      child: Text(
-                        'Device not paired with a peer. Tap to pair.',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.warningAmber),
+    return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF0F111A) : const Color(0xFFF6F8FC),
+      appBar: AppBar(
+        backgroundColor: isDark ? const Color(0xFF141724) : Colors.white,
+        elevation: 0.5,
+        titleSpacing: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: TextStyle(
+                  color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                  fontSize: 16,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Search messages...',
+                  hintStyle: TextStyle(
+                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                  ),
+                  border: InputBorder.none,
+                ),
+              )
+            : Row(
+                children: [
+                  CircleAvatar(
+                    radius: 19,
+                    backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                    child: Text(
+                      displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
                       ),
                     ),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                        );
-                      },
-                      child: const Text('View Connect Code', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                    ),
-                  ],
-                ),
-              ),
-
-            // Error Banner if error occurred
-            if (state.errorMessage != null)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                color: AppColors.alertRed.withValues(alpha: 0.15),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline_rounded, size: 16, color: AppColors.alertRed),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        state.errorMessage!,
-                        style: const TextStyle(fontSize: 12, color: AppColors.alertRed, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded, size: 16, color: AppColors.alertRed),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      onPressed: () => ref.read(chatProvider.notifier).clearError(),
-                    ),
-                  ],
-                ),
-              ),
-
-            // Message List with Date Separators
-            Expanded(
-              child: state.isLoading && state.messages.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : filteredMessages.isEmpty
-                      ? _buildEmptyState(isDark)
-                      : GestureDetector(
-                          onTap: () => FocusScope.of(context).unfocus(),
-                          child: ListView.builder(
-                            controller: _scrollController,
-                            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                            itemCount: filteredMessages.length,
-                            itemBuilder: (context, index) {
-                              final msg = filteredMessages[index];
-                              final showDateSeparator = index == 0 ||
-                                  _isDifferentDay(
-                                    filteredMessages[index - 1].timestamp,
-                                    msg.timestamp,
-                                  );
-
-                              return Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (showDateSeparator) _buildDateSeparator(msg.timestamp, isDark),
-                                  _buildMessageBubble(msg, isDark),
-                                ],
-                              );
-                            },
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                displayName,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            if (chatState.isVerified)
+                              const Icon(
+                                Icons.verified_user_rounded,
+                                color: AppColors.secureGreen,
+                                size: 14,
+                              ),
+                          ],
+                        ),
+                        Text(
+                          chatState.isRealtimeConnected ? 'End-to-End Encrypted' : 'Encrypted (Offline)',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: chatState.isRealtimeConnected
+                                ? AppColors.secureGreen
+                                : (isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
                           ),
                         ),
-            ),
-
-            // Voice Recording Bar or Standard Bottom Input Bar
-            SafeArea(
-              top: false,
-              bottom: MediaQuery.of(context).viewInsets.bottom == 0,
-              child: _isRecordingVoice
-                  ? _buildVoiceRecordingBar(isDark)
-                  : ChatInputBar(
-                      isDark: isDark,
-                      focusNode: _inputFocusNode,
-                      onSend: _sendMessage,
-                      onAttachmentTap: _showAttachmentSheet,
-                      onCameraTap: () {
-                        HapticFeedback.lightImpact();
-                        _pickAndSendCamera();
-                      },
-                      onVoiceRecordStart: _startVoiceRecord,
-                      onVoiceRecordStopAndSend: _stopVoiceRecordAndSend,
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  PreferredSizeWidget _buildSearchAppBar(bool isDark) {
-    return AppBar(
-      backgroundColor: isDark ? AppColors.surfaceDark : Colors.white,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back_rounded),
-        onPressed: () {
-          setState(() {
-            _isSearching = false;
-            _searchQuery = '';
-            _searchController.clear();
-          });
-        },
-      ),
-      title: TextField(
-        controller: _searchController,
-        autofocus: true,
-        decoration: InputDecoration(
-          hintText: 'Search encrypted messages...',
-          hintStyle: TextStyle(color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
-          border: InputBorder.none,
-        ),
-        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-      ),
-      actions: [
-        if (_searchQuery.isNotEmpty)
-          IconButton(
-            icon: const Icon(Icons.clear_rounded),
-            onPressed: () => _searchController.clear(),
-          ),
-      ],
-    );
-  }
-
-  PreferredSizeWidget _buildMainAppBar(BuildContext context, ChatState state, bool isDark) {
-    return AppBar(
-      elevation: 0.5,
-      backgroundColor: isDark ? AppColors.surfaceDark : Colors.white,
-      leadingWidth: 40,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back_rounded),
-        tooltip: 'Back to Unit Converter',
-        onPressed: () {
-          Navigator.pop(context);
-        },
-      ),
-      title: GestureDetector(
-        onTap: () => _showVerificationSheet(context, state, isDark),
-        child: Row(
-          children: [
-            // Avatar with connection badge
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                CircleAvatar(
-                  radius: 19,
-                  backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-                  child: Icon(
-                    state.isVerified ? Icons.verified_user_rounded : Icons.lock_rounded,
-                    size: 20,
-                    color: state.isVerified ? AppColors.secureGreen : AppColors.primary,
-                  ),
-                ),
-                if (state.isRealtimeConnected)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: AppColors.secureGreen,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isDark ? AppColors.surfaceDark : Colors.white,
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(width: 10),
-
-            // Chat Name & Status
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          state.peerUid != null
-                              ? 'Peer ${state.peerUid!.substring(0, state.peerUid!.length > 6 ? 6 : state.peerUid!.length)}'
-                              : 'Metric Vault',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                        ),
-                      ),
-                      if (state.isVerified) ...[
-                        const SizedBox(width: 4),
-                        const Icon(Icons.check_circle_rounded, size: 14, color: AppColors.secureGreen),
                       ],
-                    ],
-                  ),
-                  Text(
-                    state.isRealtimeConnected ? 'online • E2E Encrypted' : 'Signal E2E • Secure',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: state.isRealtimeConnected
-                          ? AppColors.secureGreen
-                          : (isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
-                      fontWeight: state.isRealtimeConnected ? FontWeight.w600 : FontWeight.normal,
                     ),
                   ),
                 ],
               ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        // Search icon
-        IconButton(
-          icon: const Icon(Icons.search_rounded),
-          tooltip: 'Search Messages',
-          onPressed: () => setState(() => _isSearching = true),
-        ),
-
-        // Shield verification icon
-        IconButton(
-          icon: Icon(
-            state.isVerified ? Icons.verified_user_rounded : Icons.shield_outlined,
-            color: state.isVerified ? AppColors.secureGreen : null,
+        actions: [
+          IconButton(
+            icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
+            tooltip: _isSearching ? 'Close Search' : 'Search',
+            onPressed: () {
+              setState(() {
+                if (_isSearching) {
+                  _searchController.clear();
+                  _searchQuery = '';
+                }
+                _isSearching = !_isSearching;
+              });
+            },
           ),
-          tooltip: 'Safety Verification',
-          onPressed: () => _showVerificationSheet(context, state, isDark),
-        ),
-
-        // WhatsApp-style 3-dots popup menu
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert_rounded),
-          tooltip: 'Menu',
-          onSelected: _onMenuSelected,
-          itemBuilder: (ctx) => [
-            const PopupMenuItem(
-              value: 'view_media',
-              child: Row(
-                children: [
-                  Icon(Icons.perm_media_outlined, size: 18),
-                  SizedBox(width: 12),
-                  Text('View Media'),
-                ],
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (val) {
+              if (val == 'safety') {
+                _showSafetyNumberDialog(context, chatState);
+              } else if (val == 'disappearing') {
+                _showDisappearingTimerDialog();
+              } else if (val == 'clear') {
+                ref.read(chatProvider.notifier).clearAllMessages();
+              } else if (val == 'settings') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                );
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'safety',
+                child: Row(
+                  children: [
+                    Icon(Icons.shield_outlined, size: 20),
+                    SizedBox(width: 10),
+                    Text('Safety Number'),
+                  ],
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'search',
-              child: Row(
-                children: [
-                  Icon(Icons.search_rounded, size: 18),
-                  SizedBox(width: 12),
-                  Text('Search Messages'),
-                ],
+              const PopupMenuItem(
+                value: 'disappearing',
+                child: Row(
+                  children: [
+                    Icon(Icons.timer_outlined, size: 20),
+                    SizedBox(width: 10),
+                    Text('Disappearing Messages'),
+                  ],
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'clear_chat',
-              child: Row(
-                children: [
-                  Icon(Icons.delete_sweep_outlined, size: 18),
-                  SizedBox(width: 12),
-                  Text('Clear Chat'),
-                ],
+              const PopupMenuItem(
+                value: 'clear',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_sweep_outlined, size: 20, color: AppColors.alertRed),
+                    SizedBox(width: 10),
+                    Text('Clear Conversation', style: TextStyle(color: AppColors.alertRed)),
+                  ],
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'export_chat',
-              child: Row(
-                children: [
-                  Icon(Icons.download_rounded, size: 18),
-                  SizedBox(width: 12),
-                  Text('Export Chat'),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'switch_converter',
-              child: Row(
-                children: [
-                  Icon(Icons.calculate_outlined, size: 18),
-                  SizedBox(width: 12),
-                  Text('Switch to Converter Decoy'),
-                ],
-              ),
-            ),
-            const PopupMenuDivider(),
-            const PopupMenuItem(
-              value: 'settings',
-              child: Row(
-                children: [
-                  Icon(Icons.settings_outlined, size: 18),
-                  SizedBox(width: 12),
-                  Text('Settings'),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDateSeparator(int timestamp, bool isDark) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1C202F) : const Color(0xFFE2E8F0),
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 2,
-                offset: const Offset(0, 1),
+              const PopupMenuItem(
+                value: 'settings',
+                child: Row(
+                  children: [
+                    Icon(Icons.settings_outlined, size: 20),
+                    SizedBox(width: 10),
+                    Text('Settings'),
+                  ],
+                ),
               ),
             ],
           ),
-          child: Text(
-            _formatDateSeparator(timestamp),
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.2,
-              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-            ),
-          ),
-        ),
+        ],
       ),
-    );
-  }
-
-  Widget _buildEmptyState(bool isDark) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.1),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.shield_rounded, size: 52, color: AppColors.primary),
-          ),
-          const SizedBox(height: 18),
-          Text(
-            'End-to-End Encrypted',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: Text(
-              'Messages are encrypted with the Signal Protocol on your device before transmission. Zero plaintext exists on any server.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.4,
-                color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // E2EE Notice banner
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: isDark ? const Color(0xFF131722) : const Color(0xFFEDF2F7),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.lock_rounded, size: 13, color: AppColors.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Messages are end-to-end encrypted with Signal Double Ratchet',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+
+            // Messages List
+            Expanded(
+              child: chatState.isLoading && chatState.messages.isEmpty
+                  ? const Center(child: CircularProgressIndicator())
+                  : filteredMessages.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.chat_bubble_outline_rounded,
+                                size: 54,
+                                color: isDark ? Colors.white12 : Colors.black12,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                _searchQuery.isNotEmpty
+                                    ? 'No messages found matching "$_searchQuery"'
+                                    : 'No messages yet.\nSend an encrypted message to begin!',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          itemCount: filteredMessages.length,
+                          itemBuilder: (ctx, index) {
+                            final msg = filteredMessages[index];
+                            return _buildMessageBubble(msg, isDark);
+                          },
+                        ),
+            ),
+
+            // Message Input Bar (Pure text with send button, no media buttons)
+            _TextInputBar(
+              isDark: isDark,
+              focusNode: _inputFocusNode,
+              onSend: (text) {
+                ref.read(chatProvider.notifier).sendMessage(text);
+                Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildMessageBubble(LocalChatMessage msg, bool isDark) {
+    final chatState = ref.watch(chatProvider);
+    final isMe = (chatState.myUid.isNotEmpty)
+        ? msg.senderUid == chatState.myUid
+        : msg.isMe;
     final timeStr = DateFormat('hh:mm a').format(DateTime.fromMillisecondsSinceEpoch(msg.timestamp));
     final isHighlighted = msg.id == _highlightedMessageId;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
-        mainAxisAlignment: msg.isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-            padding: msg.mediaType == 'image'
-                ? const EdgeInsets.all(4)
-                : const EdgeInsets.fromLTRB(14, 10, 14, 8),
-            decoration: BoxDecoration(
-              color: msg.isMe
-                  ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFE7FFDB))
-                  : (isDark ? const Color(0xFF1F2C34) : Colors.white),
-              borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(16),
-                topRight: const Radius.circular(16),
-                bottomLeft: Radius.circular(msg.isMe ? 16 : 2),
-                bottomRight: Radius.circular(msg.isMe ? 2 : 16),
+          GestureDetector(
+            onLongPress: () => _onMessageLongPress(msg),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78,
               ),
-              border: isHighlighted
-                  ? Border.all(color: AppColors.primary, width: 2.5)
-                  : null,
-              boxShadow: [
-                if (isHighlighted)
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+              decoration: BoxDecoration(
+                color: isMe
+                    ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFE7FFDB))
+                    : (isDark ? const Color(0xFF1F2C34) : Colors.white),
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isMe ? 16 : 3),
+                  bottomRight: Radius.circular(isMe ? 3 : 16),
+                ),
+                border: isHighlighted
+                    ? Border.all(color: AppColors.primary, width: 2)
+                    : null,
+                boxShadow: [
                   BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.5),
-                    blurRadius: 12,
-                    spreadRadius: 2,
-                  )
-                else
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 3,
                     offset: const Offset(0, 1),
                   ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: msg.isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                _buildBubbleContent(msg, isDark),
-                const SizedBox(height: 3),
-                Padding(
-                  padding: msg.mediaType == 'image'
-                      ? const EdgeInsets.symmetric(horizontal: 6, vertical: 2)
-                      : EdgeInsets.zero,
-                  child: Row(
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    msg.text,
+                    style: TextStyle(
+                      fontSize: 15,
+                      height: 1.35,
+                      color: isMe
+                          ? (isDark ? Colors.white : const Color(0xFF111B21))
+                          : (isDark ? Colors.white : const Color(0xFF111B21)),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
@@ -1366,14 +615,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           color: isDark ? Colors.white60 : Colors.black45,
                         ),
                       ),
-                      if (msg.isMe) ...[
+                      if (isMe) ...[
                         const SizedBox(width: 4),
                         _buildStatusIndicator(msg, isDark),
                       ],
                     ],
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
@@ -1391,7 +640,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } else if (msg.status == 'failed') {
       return GestureDetector(
         onTap: () {
-          HapticFeedback.mediumImpact();
           ref.read(chatProvider.notifier).retryMessage(msg.id);
         },
         child: const Row(
@@ -1404,369 +652,60 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
       );
     } else if (msg.status == 'read') {
-      // Double BLUE tick: message has been opened and read by peer
       return const Icon(
         Icons.done_all_rounded,
         size: 15,
-        color: Color(0xFF34B7F1), // WhatsApp blue ticks
+        color: Color(0xFF34B7F1), // WhatsApp double blue ticks
       );
     } else if (msg.status == 'delivered') {
-      // Double GREY tick: message delivered to peer device
       return Icon(
         Icons.done_all_rounded,
         size: 15,
-        color: isDark ? Colors.white54 : Colors.black45, // WhatsApp grey double tick
+        color: isDark ? Colors.white54 : Colors.black45,
       );
     } else {
-      // Single GREY tick: message sent to backend but not yet delivered
       return Icon(
         Icons.done_rounded,
         size: 15,
-        color: isDark ? Colors.white54 : Colors.black45, // WhatsApp grey single tick
+        color: isDark ? Colors.white54 : Colors.black45,
       );
     }
   }
-
-  Widget _buildBubbleContent(LocalChatMessage msg, bool isDark) {
-    if (msg.mediaType == 'image') {
-      return _buildImageContent(msg, isDark);
-    } else if (msg.mediaType == 'video') {
-      return _buildVideoContent(msg, isDark);
-    } else if (msg.mediaType == 'voice') {
-      return VoiceBubbleWidget(message: msg, isDark: isDark);
-    } else if (msg.mediaType == 'document') {
-      return _buildDocumentContent(msg, isDark);
-    } else {
-      return Text(
-        msg.text,
-        style: TextStyle(
-          fontSize: 15,
-          height: 1.3,
-          color: msg.isMe
-              ? (isDark ? Colors.white : const Color(0xFF111B21))
-              : (isDark ? Colors.white : const Color(0xFF111B21)),
-        ),
-      );
-    }
-  }
-
-  Widget _buildVideoContent(LocalChatMessage msg, bool isDark) {
-    final hasFile = msg.localPath != null && File(msg.localPath!).existsSync();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onTap: hasFile
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => FullScreenMediaGalleryViewer(
-                        items: [msg],
-                        initialIndex: 0,
-                      ),
-                    ),
-                  );
-                }
-              : null,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              width: double.infinity,
-              height: 180,
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E2235) : const Color(0xFF262C40),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.3),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white70, width: 2),
-                      ),
-                      child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 36),
-                    ),
-                  ),
-                  Positioned(
-                    bottom: 8,
-                    left: 8,
-                    right: 8,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Icon(Icons.videocam_rounded, color: Colors.white70, size: 16),
-                        if (msg.duration != null && msg.duration! > 0)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              '${msg.duration! ~/ 60}:${(msg.duration! % 60).toString().padLeft(2, '0')}',
-                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        if (msg.text.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(6, 6, 6, 2),
-            child: Text(
-              msg.text,
-              style: TextStyle(
-                fontSize: 14,
-                color: msg.isMe
-                    ? (isDark ? Colors.white : const Color(0xFF111B21))
-                    : (isDark ? Colors.white : const Color(0xFF111B21)),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildImageContent(LocalChatMessage msg, bool isDark) {
-    final heroTag = 'img_${msg.id}';
-    final hasFile = msg.localPath != null && File(msg.localPath!).existsSync();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onTap: hasFile
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ImageViewerScreen(
-                        filePath: msg.localPath!,
-                        title: msg.text,
-                        timestamp: msg.timestamp,
-                        heroTag: heroTag,
-                      ),
-                    ),
-                  );
-                }
-              : null,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: SizedBox(
-              width: double.infinity,
-              height: 200,
-              child: hasFile
-                  ? Hero(
-                      tag: heroTag,
-                      child: Image.file(
-                        File(msg.localPath!),
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => Container(
-                          color: isDark ? Colors.black38 : Colors.grey.shade200,
-                          child: const Center(
-                            child: Icon(Icons.broken_image_rounded, size: 40, color: Colors.grey),
-                          ),
-                        ),
-                      ),
-                    )
-                  : Container(
-                      color: isDark ? Colors.black38 : Colors.grey.shade200,
-                      child: const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.lock_rounded, size: 36, color: AppColors.primary),
-                            SizedBox(height: 6),
-                            Text(
-                              'Encrypted Image',
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-            ),
-          ),
-        ),
-        if (msg.text.isNotEmpty &&
-            !msg.text.toLowerCase().endsWith('.jpg') &&
-            !msg.text.toLowerCase().endsWith('.jpeg') &&
-            !msg.text.toLowerCase().endsWith('.png'))
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
-            child: Text(
-              msg.text,
-              style: TextStyle(
-                fontSize: 14,
-                color: msg.isMe
-                    ? (isDark ? Colors.white : const Color(0xFF111B21))
-                    : (isDark ? Colors.white : const Color(0xFF111B21)),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildDocumentContent(LocalChatMessage msg, bool isDark) {
-    final sizeStr = (msg.mediaSize != null && msg.mediaSize! > 0)
-        ? (msg.mediaSize! < 1024 * 1024
-            ? '${(msg.mediaSize! / 1024).toStringAsFixed(1)} KB'
-            : '${(msg.mediaSize! / (1024 * 1024)).toStringAsFixed(1)} MB')
-        : '';
-
-    return Container(
-      constraints: const BoxConstraints(minWidth: 200),
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.purpleIcon.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.insert_drive_file_rounded,
-              color: AppColors.purpleIcon,
-              size: 26,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  msg.text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: msg.isMe
-                        ? (isDark ? Colors.white : const Color(0xFF111B21))
-                        : (isDark ? Colors.white : const Color(0xFF111B21)),
-                  ),
-                ),
-                if (sizeStr.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    sizeStr,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isDark ? Colors.white60 : Colors.black45,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVoiceRecordingBar(bool isDark) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: isDark ? const Color(0xFF1A1D2B) : Colors.white,
-      child: Row(
-        children: [
-          // Red pulse recording indicator
-          Container(
-            width: 12,
-            height: 12,
-            decoration: const BoxDecoration(
-              color: AppColors.alertRed,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            '${_recordSeconds ~/ 60}:${(_recordSeconds % 60).toString().padLeft(2, '0')}',
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-          ),
-          const Spacer(),
-          TextButton(
-            onPressed: _cancelVoiceRecord,
-            child: const Text('Cancel', style: TextStyle(color: AppColors.alertRed)),
-          ),
-          IconButton.filled(
-            onPressed: _stopVoiceRecordAndSend,
-            icon: const Icon(Icons.arrow_upward_rounded),
-            style: IconButton.styleFrom(backgroundColor: AppColors.primary),
-          ),
-        ],
-      ),
-    );
-  }
-
 }
 
-/// Isolated, high-performance input bar widget.
-/// Manages its own local TextEditingController and state so that keystrokes
-/// ONLY rebuild this input area and NEVER trigger rebuilds of the message list or parent screen.
-class ChatInputBar extends StatefulWidget {
+/// Pure text input bar with no media buttons
+class _TextInputBar extends StatefulWidget {
   final bool isDark;
   final FocusNode focusNode;
   final ValueChanged<String> onSend;
-  final VoidCallback onAttachmentTap;
-  final VoidCallback onCameraTap;
-  final VoidCallback onVoiceRecordStart;
-  final VoidCallback onVoiceRecordStopAndSend;
 
-  const ChatInputBar({
-    super.key,
+  const _TextInputBar({
     required this.isDark,
     required this.focusNode,
     required this.onSend,
-    required this.onAttachmentTap,
-    required this.onCameraTap,
-    required this.onVoiceRecordStart,
-    required this.onVoiceRecordStopAndSend,
   });
 
   @override
-  State<ChatInputBar> createState() => _ChatInputBarState();
+  State<_TextInputBar> createState() => _TextInputBarState();
 }
 
-class _ChatInputBarState extends State<ChatInputBar> {
+class _TextInputBarState extends State<_TextInputBar> {
   final TextEditingController _controller = TextEditingController();
   bool _hasInputText = false;
 
   @override
   void initState() {
     super.initState();
-    _controller.addListener(_onTextChanged);
-  }
-
-  void _onTextChanged() {
-    final hasText = _controller.text.trim().isNotEmpty;
-    if (hasText != _hasInputText) {
-      setState(() {
-        _hasInputText = hasText;
-      });
-    }
+    _controller.addListener(() {
+      final hasText = _controller.text.trim().isNotEmpty;
+      if (hasText != _hasInputText) {
+        setState(() => _hasInputText = hasText);
+      }
+    });
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_onTextChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -1774,8 +713,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
   void _submit() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
-    _controller.clear();
     widget.onSend(text);
+    _controller.clear();
   }
 
   @override
@@ -1783,7 +722,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     final isDark = widget.isDark;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF141724) : Colors.white,
         border: Border(
@@ -1796,17 +735,6 @@ class _ChatInputBarState extends State<ChatInputBar> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Attachment (+) button
-          IconButton(
-            onPressed: widget.onAttachmentTap,
-            icon: const Icon(Icons.add_circle_outline_rounded, size: 26),
-            color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-            padding: const EdgeInsets.all(8),
-            constraints: const BoxConstraints(),
-            tooltip: 'Attach Media',
-          ),
-          const SizedBox(width: 6),
-
           // Text Field
           Expanded(
             child: Container(
@@ -1814,81 +742,41 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 color: isDark ? const Color(0xFF1F2436) : const Color(0xFFF1F4F9),
                 borderRadius: BorderRadius.circular(24),
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: widget.focusNode,
-                      textCapitalization: TextCapitalization.sentences,
-                      maxLines: 5,
-                      minLines: 1,
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: 'Encrypted Message...',
-                        hintStyle: TextStyle(
-                          color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                          fontSize: 14,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        border: InputBorder.none,
-                      ),
-                      onSubmitted: (_) => _submit(),
-                    ),
-                  ),
-                  // Camera Icon button inside text input
-                  IconButton(
-                    onPressed: widget.onCameraTap,
-                    icon: const Icon(Icons.camera_alt_rounded, size: 22),
+              child: TextField(
+                controller: _controller,
+                focusNode: widget.focusNode,
+                textCapitalization: TextCapitalization.sentences,
+                maxLines: 5,
+                minLines: 1,
+                style: TextStyle(
+                  fontSize: 15,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Encrypted Message...',
+                  hintStyle: TextStyle(
                     color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
-                    padding: const EdgeInsets.all(8),
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Camera',
+                    fontSize: 14,
                   ),
-                  const SizedBox(width: 4),
-                ],
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                  border: InputBorder.none,
+                ),
+                onSubmitted: (_) => _submit(),
               ),
             ),
           ),
           const SizedBox(width: 8),
 
-          // Send Button OR Mic Button
-          if (_hasInputText)
-            IconButton.filled(
-              onPressed: _submit,
-              icon: const Icon(Icons.arrow_upward_rounded, size: 20),
-              style: IconButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.all(12),
-              ),
-            )
-          else
-            GestureDetector(
-              onLongPress: widget.onVoiceRecordStart,
-              onLongPressUp: widget.onVoiceRecordStopAndSend,
-              child: IconButton.filled(
-                onPressed: () {
-                  HapticFeedback.lightImpact();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Hold mic button to record voice note'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.mic_rounded, size: 20),
-                style: IconButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.all(12),
-                ),
-              ),
+          // Send Button
+          IconButton.filled(
+            onPressed: _hasInputText ? _submit : null,
+            icon: const Icon(Icons.arrow_upward_rounded, size: 20),
+            style: IconButton.styleFrom(
+              backgroundColor: _hasInputText ? AppColors.primary : (isDark ? Colors.white12 : Colors.black12),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.all(12),
             ),
+          ),
         ],
       ),
     );

@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../features/messenger/models/chat_contact.dart';
 
 /// Secure hardware-backed key storage
 /// - iOS: Keychain with kSecAttrAccessibleWhenUnlockedThisDeviceOnly (never synced to iCloud)
@@ -131,6 +133,73 @@ class SecureKeyStorage {
   static Future<String?> getOneTimePrekeyId() =>
       _storage.read(key: _kOneTimePrekeyId);
 
+  static const int maxContactsLimit = 5;
+  static const _kContactsList = 'metric_contacts_list_json';
+
+  // --- Contact Management (Max 5 People) ---
+  static Future<List<ChatContact>> getContacts() async {
+    final raw = await _storage.read(key: _kContactsList);
+    if (raw == null || raw.isEmpty) {
+      // Legacy fallback: check if single peer exists
+      final singleUid = await _storage.read(key: _kPairedUid);
+      if (singleUid != null && singleUid.isNotEmpty) {
+        final code = await _storage.read(key: _kPeerConnectCode) ?? '';
+        final pk = await _storage.read(key: _kRemoteIdentityPublicKey);
+        return [
+          ChatContact(
+            uid: singleUid,
+            username: 'Contact 1',
+            connectCode: code,
+            publicKeyHex: pk,
+            addedAt: DateTime.now().millisecondsSinceEpoch,
+          )
+        ];
+      }
+      return [];
+    }
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list.map((item) => ChatContact.fromMap(item as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<void> saveContacts(List<ChatContact> contacts) async {
+    final capped = contacts.take(maxContactsLimit).toList();
+    final jsonStr = jsonEncode(capped.map((c) => c.toMap()).toList());
+    await _storage.write(key: _kContactsList, value: jsonStr);
+    if (capped.isNotEmpty) {
+      await _storage.write(key: _kPairingComplete, value: 'true');
+    }
+  }
+
+  static Future<bool> addContact(ChatContact contact) async {
+    final current = await getContacts();
+    final existingIndex = current.indexWhere((c) => c.uid == contact.uid);
+    if (existingIndex >= 0) {
+      // Update existing contact
+      current[existingIndex] = contact;
+      await saveContacts(current);
+      return true;
+    }
+    if (current.length >= maxContactsLimit) {
+      return false; // Cap strictly enforced at 5!
+    }
+    current.add(contact);
+    await saveContacts(current);
+    return true;
+  }
+
+  static Future<void> removeContact(String peerUid) async {
+    final current = await getContacts();
+    current.removeWhere((c) => c.uid == peerUid);
+    await saveContacts(current);
+    if (current.isEmpty) {
+      await _storage.delete(key: _kPairingComplete);
+    }
+  }
+
   // --- Paired Peer Bundle Info ---
   static Future<void> savePairedPeerBundle({
     required String peerUid,
@@ -157,6 +226,48 @@ class SecureKeyStorage {
     await _storage.write(key: _kPairingComplete, value: 'true');
   }
 
+  static Future<void> savePeerBundle({
+    required String peerUid,
+    required String peerIdentityPublicKey,
+    required String peerSignedPrekey,
+    required int peerSignedPrekeyId,
+    String? peerSigningPublicKey,
+    String? peerOneTimePrekey,
+    int? peerOneTimePrekeyId,
+  }) async {
+    await _storage.write(key: '${_kRemoteIdentityPublicKey}_$peerUid', value: peerIdentityPublicKey);
+    await _storage.write(key: '${_kRemoteSignedPrekey}_$peerUid', value: peerSignedPrekey);
+    await _storage.write(key: '${_kRemoteSignedPrekeyId}_$peerUid', value: peerSignedPrekeyId.toString());
+    if (peerSigningPublicKey != null) {
+      await _storage.write(key: '${_kRemoteSigningPublicKey}_$peerUid', value: peerSigningPublicKey);
+    }
+    if (peerOneTimePrekey != null) {
+      await _storage.write(key: '${_kRemoteOneTimePrekey}_$peerUid', value: peerOneTimePrekey);
+    }
+    if (peerOneTimePrekeyId != null) {
+      await _storage.write(key: '${_kRemoteOneTimePrekeyId}_$peerUid', value: peerOneTimePrekeyId.toString());
+    }
+    await savePairedPeerBundle(
+      peerUid: peerUid,
+      peerIdentityPublicKey: peerIdentityPublicKey,
+      peerSignedPrekey: peerSignedPrekey,
+      peerSignedPrekeyId: peerSignedPrekeyId,
+      peerSigningPublicKey: peerSigningPublicKey,
+      peerOneTimePrekey: peerOneTimePrekey,
+      peerOneTimePrekeyId: peerOneTimePrekeyId,
+    );
+  }
+
+  static Future<String?> getRemoteIdentityPublicKeyForPeer(String peerUid) async {
+    final key = await _storage.read(key: '${_kRemoteIdentityPublicKey}_$peerUid');
+    return key ?? getRemoteIdentityPublicKey();
+  }
+
+  static Future<String?> getRemoteSignedPrekeyForPeer(String peerUid) async {
+    final key = await _storage.read(key: '${_kRemoteSignedPrekey}_$peerUid');
+    return key ?? getRemoteSignedPrekey();
+  }
+
   static Future<void> savePairedPeer({
     required String peerUid,
     required String peerPublicKeyHex,
@@ -166,7 +277,12 @@ class SecureKeyStorage {
     await _storage.write(key: _kPairingComplete, value: 'true');
   }
 
-  static Future<String?> getPairedUid() => _storage.read(key: _kPairedUid);
+  static Future<String?> getPairedUid() async {
+    final contacts = await getContacts();
+    if (contacts.isNotEmpty) return contacts.first.uid;
+    return _storage.read(key: _kPairedUid);
+  }
+
   static Future<String?> getRemoteIdentityPublicKey() =>
       _storage.read(key: _kRemoteIdentityPublicKey);
   static Future<String?> getRemoteSigningPublicKey() =>
@@ -183,11 +299,13 @@ class SecureKeyStorage {
       _storage.read(key: _kPeerConnectCode);
 
   static Future<bool> isPaired() async {
+    final contacts = await getContacts();
+    if (contacts.isNotEmpty) return true;
     final value = await _storage.read(key: _kPairingComplete);
     return value == 'true';
   }
 
-  // --- Ratchet State Keys ---
+  // --- Ratchet State Keys (Per Peer) ---
   static Future<void> saveRatchetKeys({
     required String rootKeyHex,
     required String sendChainKeyHex,
@@ -196,6 +314,33 @@ class SecureKeyStorage {
     await _storage.write(key: _kRootKey, value: rootKeyHex);
     await _storage.write(key: _kSendChainKey, value: sendChainKeyHex);
     await _storage.write(key: _kRecvChainKey, value: recvChainKeyHex);
+  }
+
+  static Future<void> savePeerRatchetKeys({
+    required String peerUid,
+    required String rootKeyHex,
+    required String sendChainKeyHex,
+    required String recvChainKeyHex,
+  }) async {
+    await _storage.write(key: '${_kRootKey}_$peerUid', value: rootKeyHex);
+    await _storage.write(key: '${_kSendChainKey}_$peerUid', value: sendChainKeyHex);
+    await _storage.write(key: '${_kRecvChainKey}_$peerUid', value: recvChainKeyHex);
+    await saveRatchetKeys(rootKeyHex: rootKeyHex, sendChainKeyHex: sendChainKeyHex, recvChainKeyHex: recvChainKeyHex);
+  }
+
+  static Future<String?> getPeerRootKey(String peerUid) async {
+    final key = await _storage.read(key: '${_kRootKey}_$peerUid');
+    return key ?? getRootKey();
+  }
+
+  static Future<String?> getPeerSendChainKey(String peerUid) async {
+    final key = await _storage.read(key: '${_kSendChainKey}_$peerUid');
+    return key ?? getSendChainKey();
+  }
+
+  static Future<String?> getPeerRecvChainKey(String peerUid) async {
+    final key = await _storage.read(key: '${_kRecvChainKey}_$peerUid');
+    return key ?? getRecvChainKey();
   }
 
   static Future<String?> getRootKey() => _storage.read(key: _kRootKey);
@@ -394,6 +539,7 @@ class SecureKeyStorage {
     await _storage.delete(key: _kLastDriveSyncTime);
     await _storage.delete(key: _kHasPromptedDriveAuth);
     await _storage.delete(key: _kSafetyNumberVerified);
+    await _storage.delete(key: _kContactsList);
   }
 
   // Wipe all keys (nuclear reset)
