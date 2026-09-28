@@ -367,6 +367,18 @@ class LocalDatabaseService {
     }
   }
 
+  static Future<LocalChatMessage?> getMessageById(String id) async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'messages',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return LocalChatMessage.fromMap(maps.first);
+  }
+
   static Future<List<LocalChatMessage>> getMessages() async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;

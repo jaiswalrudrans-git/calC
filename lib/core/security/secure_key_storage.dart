@@ -544,6 +544,16 @@ class SecureKeyStorage {
   static Future<void> setDriveBackupEnabled(bool enabled) =>
       _storage.write(key: _kDriveBackupEnabled, value: enabled.toString());
 
+  static const String _kNotificationsEnabled = 'notifications_enabled';
+
+  static Future<bool> getNotificationsEnabled() async {
+    final val = await _storage.read(key: _kNotificationsEnabled);
+    return val == null ? true : val == 'true';
+  }
+
+  static Future<void> setNotificationsEnabled(bool enabled) =>
+      _storage.write(key: _kNotificationsEnabled, value: enabled.toString());
+
   /// Wipe user session credentials, connect code, drive tokens, and pairing state upon logout
   static Future<void> clearUserSessionOnLogout() async {
     await _storage.delete(key: _kMyConnectCode);

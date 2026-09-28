@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/config/firebase_config.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'core/notifications/decoy_notification_service.dart';
+import 'core/security/secure_key_storage.dart';
 import 'core/theme/theme_provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/security/signal_crypto.dart';
@@ -30,9 +33,10 @@ void main() async {
     ),
   );
 
-  // Initialize Firebase Spark
+  // Initialize Firebase Spark & Background Messaging Handler
   try {
     await FirebaseConfig.init();
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   } catch (e) {
     debugPrint('[Metric Firebase Init] $e');
   }
@@ -43,7 +47,7 @@ void main() async {
     ),
   );
 
-  // Background initialization of cryptographic and cloud services
+  // Background initialization of cryptographic, notification, and cloud services
   _initializeBackgroundServices();
 }
 
@@ -52,6 +56,14 @@ Future<void> _initializeBackgroundServices() async {
     await SignalCryptoService.ensurePrekeyBundle();
     await PrivacyGuard.setScreenProtection(true);
     await GoogleDriveBackupService.instance.init();
+    await DecoyNotificationService.instance.init();
+
+    // Start background realtime listener if user is already logged in with contacts
+    final myUid = await SecureKeyStorage.getMyDeviceId();
+    final contacts = await SecureKeyStorage.getContacts();
+    if (myUid != null && myUid.isNotEmpty && contacts.isNotEmpty) {
+      DecoyNotificationService.instance.startRealtimeListener(myUid: myUid, contacts: contacts);
+    }
   } catch (e) {
     debugPrint('[Metric Services Init] $e');
   }

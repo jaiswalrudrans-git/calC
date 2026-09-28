@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/security/privacy_guard.dart';
 import '../../../core/security/secure_key_storage.dart';
+import '../../../core/notifications/decoy_notification_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../models/chat_contact.dart';
@@ -38,12 +39,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _chatNotifier = ref.read(chatProvider.notifier);
     PrivacyGuard.setScreenProtection(true);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (widget.contact != null) {
         _chatNotifier?.setActivePeer(
           widget.contact!.uid,
           contactName: widget.contact!.username,
         );
+        final myUid = await SecureKeyStorage.getMyDeviceId();
+        if (myUid != null && myUid.isNotEmpty) {
+          final participants = [myUid, widget.contact!.uid]..sort();
+          final channelId = 'ch_${participants.join('_')}';
+          DecoyNotificationService.instance.setActiveConversation(channelId);
+        }
       }
       _chatNotifier?.setChatActive(true);
     });
@@ -55,6 +62,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    DecoyNotificationService.instance.setActiveConversation(null);
     _highlightTimer?.cancel();
     _searchController.dispose();
     _scrollController.dispose();

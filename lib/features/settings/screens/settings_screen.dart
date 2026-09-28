@@ -5,6 +5,7 @@ import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
 import '../../../core/database/local_cache.dart';
 import '../../../core/backup/google_drive_backup_service.dart';
+import '../../../core/notifications/decoy_notification_service.dart';
 import '../../../core/theme/app_colors.dart';
 import 'secret_knock_screen.dart';
 import '../../auth/auth.dart';
@@ -19,6 +20,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _biometricsEnabled = true;
+  bool _notificationsEnabled = true;
   int _autoLockSeconds = 30;
   bool _isPaired = false;
   String _deviceUid = '';
@@ -81,10 +83,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final accUser = await AccountAuthService.getCurrentUsername();
     final accLoggedIn = await AccountAuthService.isLoggedIn();
     final code = await AccountAuthService.getCurrentConnectCode();
+    final notifs = await SecureKeyStorage.getNotificationsEnabled();
 
     if (mounted) {
       setState(() {
         _biometricsEnabled = bio;
+        _notificationsEnabled = notifs;
         _autoLockSeconds = autoLock;
         _isPaired = paired;
         _deviceUid = uid;
@@ -778,6 +782,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _buildCard(
               isDark,
               children: [
+                SwitchListTile(
+                  secondary: Icon(Icons.notifications_outlined, color: isDark ? MetricColors.textPrimary : Colors.black87),
+                  title: const Text('Decoy Notifications', style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Discreet calC alerts when new messages arrive'),
+                  value: _notificationsEnabled,
+                  activeThumbColor: isDark ? Colors.white : Colors.black,
+                  activeTrackColor: isDark ? Colors.white38 : Colors.black26,
+                  onChanged: (val) async {
+                    await SecureKeyStorage.setNotificationsEnabled(val);
+                    setState(() => _notificationsEnabled = val);
+                    if (val) {
+                      await DecoyNotificationService.instance.requestPermission();
+                    } else {
+                      await DecoyNotificationService.instance.cancelAll();
+                    }
+                  },
+                ),
+                Divider(height: 1, color: isDark ? MetricGlass.border : Colors.grey.shade300),
                 SwitchListTile(
                   secondary: Icon(Icons.lock_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
                   title: const Text('Biometric App Lock', style: TextStyle(fontWeight: FontWeight.w600)),

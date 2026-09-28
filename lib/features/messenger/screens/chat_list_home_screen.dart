@@ -8,6 +8,7 @@ import '../../../core/database/local_cache.dart';
 import '../../../core/security/secure_key_storage.dart';
 import '../../../core/security/signal_crypto.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/notifications/decoy_notification_service.dart';
 import '../../auth/services/account_auth_service.dart';
 import '../../converter/screens/converter_home_screen.dart';
 import '../../settings/screens/settings_screen.dart';
@@ -126,6 +127,40 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     if (code.isNotEmpty) {
       unawaited(SignalCryptoService.publishMyConnectCode());
     }
+
+    // Start realtime listener across user contacts
+    if (myUid != null && myUid.isNotEmpty && contactsList.isNotEmpty) {
+      DecoyNotificationService.instance.startRealtimeListener(myUid: myUid, contacts: contactsList);
+    }
+
+    // Check for pending conversation from tapped decoy notification
+    final pendingChannel = DecoyNotificationService.instance.consumePendingConversationId();
+    if (pendingChannel != null && mounted && myUid != null) {
+      final targetContact = contactsList.firstWhere(
+        (c) {
+          final participants = [myUid, c.uid]..sort();
+          final ch = 'ch_${participants.join('_')}';
+          return ch == pendingChannel;
+        },
+        orElse: () => const ChatContact(uid: '', username: '', connectCode: '', addedAt: 0),
+      );
+      if (targetContact.uid.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _openChat(targetContact);
+          }
+        });
+      }
+    }
+  }
+
+  void _openChat(ChatContact contact) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatScreen(contact: contact),
+      ),
+    ).then((_) => _loadState());
   }
 
   void _copyConnectCode() {
@@ -804,14 +839,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
             ),
           ],
         ),
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ChatScreen(contact: contact),
-            ),
-          ).then((_) => _loadState());
-        },
+        onTap: () => _openChat(contact),
       ),
     );
   }
