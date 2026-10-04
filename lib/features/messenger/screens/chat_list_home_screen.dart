@@ -33,20 +33,62 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
   String? _connectCode;
   List<ChatContact> _contacts = [];
   Map<String, LocalChatMessage?> _lastMessages = {};
+  Map<String, int> _unreadCounts = {};
   final Map<String, StreamSubscription<DocumentSnapshot>> _peerPresenceSubs = {};
   final Map<String, bool> _onlineContacts = {};
   bool _isLoading = true;
   StreamSubscription<DocumentSnapshot>? _userDocSub;
+  StreamSubscription<String>? _dbChangeSub;
 
   @override
   void initState() {
     super.initState();
     PresenceService.instance.enterChatApp();
+    _subscribeToDbChanges();
     _loadState();
+  }
+
+  void _subscribeToDbChanges() {
+    _dbChangeSub?.cancel();
+    _dbChangeSub = LocalDatabaseService.onMessageChange.listen((peerUid) {
+      if (!mounted) return;
+      _refreshUnreadAndLastMessages(peerUid: peerUid.isNotEmpty ? peerUid : null);
+    });
+  }
+
+  Future<void> _refreshUnreadAndLastMessages({String? peerUid}) async {
+    final myUid = await AccountAuthService.getCurrentUserUid();
+    final counts = await LocalDatabaseService.getAllUnreadCounts();
+
+    final Map<String, LocalChatMessage?> lastMsgs = Map.from(_lastMessages);
+    if (peerUid != null) {
+      lastMsgs[peerUid] = await LocalDatabaseService.getLastMessageForPeer(peerUid, myUid: myUid);
+    } else {
+      for (final contact in _contacts) {
+        lastMsgs[contact.uid] = await LocalDatabaseService.getLastMessageForPeer(contact.uid, myUid: myUid);
+      }
+    }
+
+    // Sort contacts by most recent activity (latest message timestamp, or addedAt)
+    final sortedContacts = List<ChatContact>.from(_contacts);
+    sortedContacts.sort((a, b) {
+      final aTime = lastMsgs[a.uid]?.timestamp ?? a.addedAt;
+      final bTime = lastMsgs[b.uid]?.timestamp ?? b.addedAt;
+      return bTime.compareTo(aTime);
+    });
+
+    if (mounted) {
+      setState(() {
+        _unreadCounts = counts;
+        _lastMessages = lastMsgs;
+        _contacts = sortedContacts;
+      });
+    }
   }
 
   @override
   void dispose() {
+    _dbChangeSub?.cancel();
     _userDocSub?.cancel();
     for (final sub in _peerPresenceSubs.values) {
       sub.cancel();
@@ -123,6 +165,15 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
       lastMsgs[contact.uid] = await LocalDatabaseService.getLastMessageForPeer(contact.uid, myUid: myUid);
     }
 
+    final unreadCounts = await LocalDatabaseService.getAllUnreadCounts();
+
+    // Sort contacts by most recent activity (latest message timestamp, or addedAt)
+    contactsList.sort((a, b) {
+      final aTime = lastMsgs[a.uid]?.timestamp ?? a.addedAt;
+      final bTime = lastMsgs[b.uid]?.timestamp ?? b.addedAt;
+      return bTime.compareTo(aTime);
+    });
+
     if (firestore != null) {
       for (final contact in contactsList) {
         if (!_peerPresenceSubs.containsKey(contact.uid)) {
@@ -145,6 +196,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
         _connectCode = code;
         _contacts = contactsList;
         _lastMessages = lastMsgs;
+        _unreadCounts = unreadCounts;
         _isLoading = false;
       });
     }
@@ -181,6 +233,12 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
   }
 
   void _openChat(ChatContact contact) {
+    if ((_unreadCounts[contact.uid] ?? 0) > 0) {
+      setState(() {
+        _unreadCounts[contact.uid] = 0;
+      });
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -789,6 +847,8 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
 
   Widget _buildContactCard(ChatContact contact, bool isDark) {
     final lastMsg = _lastMessages[contact.uid];
+    final unreadCount = _unreadCounts[contact.uid] ?? 0;
+    final hasUnread = unreadCount > 0;
     final lastText = lastMsg != null ? lastMsg.text : 'Encrypted conversation ready';
     final timeStr = lastMsg != null
         ? _cardTimeFormat.format(DateTime.fromMillisecondsSinceEpoch(lastMsg.timestamp))
@@ -802,8 +862,10 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
         color: isDark ? MetricGlass.level1 : Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDark ? MetricGlass.border : AppColors.cardBorderLight,
-          width: 1.0,
+          color: hasUnread
+              ? (isDark ? AppColors.alertRed.withValues(alpha: 0.4) : AppColors.alertRed.withValues(alpha: 0.3))
+              : (isDark ? MetricGlass.border : AppColors.cardBorderLight),
+          width: hasUnread ? 1.5 : 1.0,
         ),
       ),
       child: Material(
@@ -856,7 +918,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                         contact.username,
                         style: TextStyle(
                           fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                          fontWeight: hasUnread ? FontWeight.w800 : FontWeight.bold,
                           color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
                         ),
                         overflow: TextOverflow.ellipsis,
@@ -888,7 +950,10 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
                   timeStr,
                   style: TextStyle(
                     fontSize: 11,
-                    color: isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+                    fontWeight: hasUnread ? FontWeight.bold : FontWeight.normal,
+                    color: hasUnread
+                        ? AppColors.alertRed
+                        : (isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
                   ),
                 ),
             ],
@@ -901,27 +966,64 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 13,
-                color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                color: hasUnread
+                    ? (isDark ? Colors.white : Colors.black87)
+                    : (isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight),
               ),
             ),
           ),
-          trailing: PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded, size: 20),
-            onSelected: (val) {
-              if (val == 'remove') {
-                _removeContact(contact);
-              }
-            },
-            itemBuilder: (ctx) => [
-              const PopupMenuItem(
-                value: 'remove',
-                child: Row(
-                  children: [
-                    Icon(Icons.delete_outline_rounded, color: AppColors.alertRed, size: 20),
-                    SizedBox(width: 8),
-                    Text('Remove Contact', style: TextStyle(color: AppColors.alertRed)),
-                  ],
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (hasUnread) ...[
+                Container(
+                  constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.alertRed,
+                    borderRadius: BorderRadius.circular(11),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.alertRed.withValues(alpha: 0.4),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text(
+                      unreadCount > 99 ? '99+' : '$unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
                 ),
+                const SizedBox(width: 4),
+              ],
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert_rounded, size: 20),
+                onSelected: (val) {
+                  if (val == 'remove') {
+                    _removeContact(contact);
+                  }
+                },
+                itemBuilder: (ctx) => [
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline_rounded, color: AppColors.alertRed, size: 20),
+                        SizedBox(width: 8),
+                        Text('Remove Contact', style: TextStyle(color: AppColors.alertRed)),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

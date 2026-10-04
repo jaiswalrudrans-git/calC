@@ -233,7 +233,7 @@ class ChatNotifier extends Notifier<ChatState> {
                   text: decryptedText,
                   timestamp: timestamp,
                   isMe: isMe,
-                  status: status,
+                  status: (_isChatActive && !isMe) ? 'read' : status,
                 );
 
                 final updatedList = List<LocalChatMessage>.from(state.messages);
@@ -499,12 +499,7 @@ class ChatNotifier extends Notifier<ChatState> {
     // 2. Delete all messages for this peer from local SQLite database
     if (peerUid != null) {
       try {
-        final db = await LocalDatabaseService.database;
-        await db.delete(
-          'messages',
-          where: 'senderUid = ? OR receiverUid = ?',
-          whereArgs: [peerUid, peerUid],
-        );
+        await LocalDatabaseService.clearMessagesForPeer(peerUid);
       } catch (e) {
         if (kDebugMode) debugPrint('[ChatProvider] Local clear error: $e');
       }

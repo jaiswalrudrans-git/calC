@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart' as p;
@@ -209,6 +210,20 @@ class DriveLedgerItem {
 class LocalDatabaseService {
   static Database? _db;
 
+  static final StreamController<String> _messageChangeStreamController =
+      StreamController<String>.broadcast();
+
+  /// Broadcast stream that emits the peer UID whenever messages are inserted,
+  /// updated, marked read, or deleted in the local database.
+  static Stream<String> get onMessageChange => _messageChangeStreamController.stream;
+
+  /// Notify all active listeners of a local database change for [peerUid].
+  static void notifyMessageChange([String? peerUid]) {
+    if (!_messageChangeStreamController.isClosed) {
+      _messageChangeStreamController.add(peerUid ?? '');
+    }
+  }
+
   static Future<Database> get database async {
     if (_db != null) return _db!;
     _db = await _initDb();
@@ -397,6 +412,8 @@ class LocalDatabaseService {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }
+    final peerUid = message.isMe ? message.receiverUid : message.senderUid;
+    notifyMessageChange(peerUid);
   }
 
   static Future<LocalChatMessage?> getMessageById(String id) async {
@@ -495,12 +512,13 @@ class LocalDatabaseService {
       await db.update(
         'messages',
         {'status': status},
-        where: 'id = ? AND status != "read"',
+        where: "id = ? AND status != 'read'",
         whereArgs: [messageId],
       );
     } else {
       await db.update('messages', {'status': status}, where: 'id = ?', whereArgs: [messageId]);
     }
+    notifyMessageChange();
   }
 
   static Future<void> markAllSentMessagesAsRead(String peerUid) async {
@@ -508,9 +526,10 @@ class LocalDatabaseService {
     await db.update(
       'messages',
       {'status': 'read'},
-      where: 'isMe = 1 AND receiverUid = ? AND status != "read"',
+      where: "isMe = 1 AND receiverUid = ? AND status != 'read'",
       whereArgs: [peerUid],
     );
+    notifyMessageChange(peerUid);
   }
 
   static Future<void> markAllReceivedMessagesAsRead(String peerUid) async {
@@ -518,9 +537,10 @@ class LocalDatabaseService {
     await db.update(
       'messages',
       {'status': 'read'},
-      where: 'isMe = 0 AND senderUid = ? AND status != "read"',
+      where: "isMe = 0 AND senderUid = ? AND status != 'read'",
       whereArgs: [peerUid],
     );
+    notifyMessageChange(peerUid);
   }
 
   static Future<void> markAllSentMessagesAsDelivered(String peerUid) async {
@@ -528,9 +548,37 @@ class LocalDatabaseService {
     await db.update(
       'messages',
       {'status': 'delivered'},
-      where: 'isMe = 1 AND receiverUid = ? AND status = "sent"',
+      where: "isMe = 1 AND receiverUid = ? AND status = 'sent'",
       whereArgs: [peerUid],
     );
+  }
+
+  /// Get the number of unread messages received from a specific peer
+  static Future<int> getUnreadCountForPeer(String peerUid) async {
+    final db = await database;
+    final res = await db.rawQuery(
+      "SELECT COUNT(*) as unread FROM messages WHERE isMe = 0 AND senderUid = ? AND status != 'read'",
+      [peerUid],
+    );
+    if (res.isEmpty) return 0;
+    return (res.first['unread'] as num?)?.toInt() ?? 0;
+  }
+
+  /// Batch retrieve unread counts for all contacts in a single query
+  static Future<Map<String, int>> getAllUnreadCounts() async {
+    final db = await database;
+    final res = await db.rawQuery(
+      "SELECT senderUid, COUNT(*) as unread FROM messages WHERE isMe = 0 AND status != 'read' GROUP BY senderUid",
+    );
+    final Map<String, int> counts = {};
+    for (final row in res) {
+      final senderUid = row['senderUid'] as String?;
+      final unread = (row['unread'] as num?)?.toInt() ?? 0;
+      if (senderUid != null && senderUid.isNotEmpty) {
+        counts[senderUid] = unread;
+      }
+    }
+    return counts;
   }
 
   static Future<void> updateReaction(String messageId, String? reaction) async {
@@ -541,11 +589,23 @@ class LocalDatabaseService {
   static Future<void> deleteMessage(String messageId) async {
     final db = await database;
     await db.delete('messages', where: 'id = ?', whereArgs: [messageId]);
+    notifyMessageChange();
   }
 
   static Future<void> clearAllMessages() async {
     final db = await database;
     await db.delete('messages');
+    notifyMessageChange();
+  }
+
+  static Future<void> clearMessagesForPeer(String peerUid) async {
+    final db = await database;
+    await db.delete(
+      'messages',
+      where: 'senderUid = ? OR receiverUid = ?',
+      whereArgs: [peerUid, peerUid],
+    );
+    notifyMessageChange(peerUid);
   }
 
   // --- Conversion History & Favorites Operations ---
