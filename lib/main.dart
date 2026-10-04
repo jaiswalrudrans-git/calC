@@ -13,6 +13,7 @@ import 'core/security/signal_crypto.dart';
 import 'core/security/privacy_guard.dart';
 import 'core/backup/google_drive_backup_service.dart';
 import 'features/converter/screens/converter_home_screen.dart';
+import 'features/messenger/services/presence_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,26 +34,26 @@ void main() async {
     ),
   );
 
-  // Initialize Firebase Spark & Background Messaging Handler
-  try {
-    await FirebaseConfig.init();
-    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-  } catch (e) {
-    debugPrint('[Metric Firebase Init] $e');
-  }
-
+  // Instant first-frame render: launch UI immediately without blocking on cloud network handshakes
   runApp(
     const ProviderScope(
       child: MetricApp(),
     ),
   );
 
-  // Background initialization of cryptographic, notification, and cloud services
+  // Background warm-up of Firebase, cryptography, notifications, and cloud services
   _initializeBackgroundServices();
 }
 
 Future<void> _initializeBackgroundServices() async {
   try {
+    try {
+      await FirebaseConfig.init();
+      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    } catch (e) {
+      debugPrint('[Metric Firebase Init] $e');
+    }
+
     await SignalCryptoService.ensurePrekeyBundle();
     await PrivacyGuard.setScreenProtection(true);
     await GoogleDriveBackupService.instance.init();
@@ -93,6 +94,7 @@ class _MetricAppState extends ConsumerState<MetricApp> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    PresenceService.instance.onAppLifecycleChanged(state);
     if (state == AppLifecycleState.paused) {
       // INSTANT RESET TO DECOY CONVERTER ON HOME / MINIMIZE
       navigatorKey.currentState?.popUntil((route) => route.isFirst);

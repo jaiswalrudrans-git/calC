@@ -35,21 +35,22 @@ class MetricGlass {
 /// Reserved exclusively for the Chat Message visual system.
 /// Outside the chat, turquoise is never used.
 class MetricChatColors {
-  // Received messages
-  static const Color receivedText = Color(0xFF21DCC8); // Sophisticated muted turquoise
-  static const Color receivedBubble = Color(0xFF091211); // Dark translucent glass with faint turquoise presence
-  static const Color receivedBorder = Color(0x2B21DCC8); // Subtle turquoise edge highlight
+  // Received messages (Simple, clean, neutral - 50% transparent background)
+  static const Color receivedText = Color(0xFFF3F4F6); // Clean neutral off-white
+  static const Color receivedBubble = Color(0x801E222B); // 50% transparent neutral dark bubble
+  static const Color receivedBorder = Color(0x28FFFFFF); // Subtle neutral border
 
-  // Sent messages
-  static const Color sentText = Color(0xFFC5C5C5); // Neutral light grey
-  static const Color sentBubble = Color(0xFF141414); // Neutral translucent glass
-  static const Color sentBorder = Color(0x17FFFFFF); // Neutral edge reflection
+  // Sent messages (50% transparent background)
+  static const Color sentText = Color(0xFFF3F4F6); // Neutral clean off-white
+  static const Color sentBubble = Color(0x80282F3D); // 50% transparent neutral sent bubble
+  static const Color sentBorder = Color(0x2EFFFFFF); // Subtle neutral edge reflection
 
-  // Message metadata & chat actions
-  static const Color readReceipt = Color(0xFF21DCC8);
+  // Presence & status
+  static const Color onlineGreen = Color(0xFF00C9A7); // Clean green for presence
+  static const Color readReceipt = Color(0xFF38BDF8); // Clean blue for read ticks
   static const Color sendButton = Color(0xFF21DCC8);
-  static const Color unreadDot = Color(0xFF21DCC8);
-  static const Color timestamp = Color(0xFF666666);
+  static const Color unreadDot = Color(0xFF00C9A7);
+  static const Color timestamp = Color(0xFF8E95A5);
 }
 
 /// AppColors: Full compatibility with all existing screen references,

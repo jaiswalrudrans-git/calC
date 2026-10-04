@@ -92,22 +92,41 @@ class ChatNotifier extends Notifier<ChatState> {
     } catch (_) {}
   }
 
-  /// Switch or initialize active chat conversation with a specific contact
+  /// Switch or initialize active chat conversation with a specific contact instantly
   Future<void> setActivePeer(String peerUid, {String? contactName}) async {
     _cleanup();
-    await initChat(explicitPeerUid: peerUid, contactName: contactName);
+
+    final myUid = state.myUid.isNotEmpty ? state.myUid : await AuthService.getOrCreateDeviceUid();
+    final participants = [myUid, peerUid]..sort();
+    final channelId = 'ch_${participants.join('_')}';
+
+    // 1. Instant local message retrieval from memory/SQLite
+    final localMsgs = await LocalDatabaseService.getMessagesForPeer(peerUid, myUid: myUid);
+
+    state = state.copyWith(
+      isLoading: false,
+      myUid: myUid,
+      peerUid: peerUid,
+      peerName: contactName ?? state.peerName ?? 'Contact',
+      channelId: channelId,
+      messages: localMsgs,
+    );
+
+    // 2. Load safety number asynchronously in background
+    unawaited(() async {
+      final safetyNumber = await SignalCryptoService.getSafetyNumber();
+      final isVerified = await SecureKeyStorage.isSafetyNumberVerified();
+      state = state.copyWith(safetyNumber: safetyNumber, isVerified: isVerified);
+    }());
+
+    // 3. Connect Firestore Realtime listener for zero-latency instant messaging
+    _connectFirestoreListener(myUid: myUid, peerUid: peerUid, channelId: channelId);
   }
 
   /// Initialize local chat state, load SQLite cache, and start Firestore realtime listener
   Future<void> initChat({String? explicitPeerUid, String? contactName}) async {
-    state = state.copyWith(isLoading: true);
-
-    await AuthService.ensureFirebaseAuth();
-
-    final myUid = await AuthService.getOrCreateDeviceUid();
+    final myUid = state.myUid.isNotEmpty ? state.myUid : await AuthService.getOrCreateDeviceUid();
     final peerUid = explicitPeerUid ?? await SecureKeyStorage.getPairedUid();
-    final safetyNumber = await SignalCryptoService.getSafetyNumber();
-    final isVerified = await SecureKeyStorage.isSafetyNumberVerified();
 
     String? channelId;
     if (peerUid != null && peerUid.isNotEmpty) {
@@ -115,7 +134,7 @@ class ChatNotifier extends Notifier<ChatState> {
       channelId = 'ch_${participants.join('_')}';
     }
 
-    // 1. Load local messages from secure SQLite cache
+    // 1. Show cached local messages immediately without showing a blank spinner
     final localMsgs = peerUid != null
         ? await LocalDatabaseService.getMessagesForPeer(peerUid, myUid: myUid)
         : await LocalDatabaseService.getMessages();
@@ -127,11 +146,17 @@ class ChatNotifier extends Notifier<ChatState> {
       peerName: contactName ?? state.peerName ?? 'Contact',
       channelId: channelId,
       messages: localMsgs,
-      safetyNumber: safetyNumber,
-      isVerified: isVerified,
     );
 
-    // 2. Connect Firestore Realtime listener for zero-latency instant messaging
+    // 2. Background verification
+    unawaited(() async {
+      await AuthService.ensureFirebaseAuth();
+      final safetyNumber = await SignalCryptoService.getSafetyNumber();
+      final isVerified = await SecureKeyStorage.isSafetyNumberVerified();
+      state = state.copyWith(safetyNumber: safetyNumber, isVerified: isVerified);
+    }());
+
+    // 3. Connect Firestore Realtime listener
     if (peerUid != null && channelId != null) {
       _connectFirestoreListener(myUid: myUid, peerUid: peerUid, channelId: channelId);
     }
@@ -161,7 +186,6 @@ class ChatNotifier extends Notifier<ChatState> {
       _firestoreSub = messagesCollection.snapshots().listen(
         (snapshot) async {
           state = state.copyWith(isRealtimeConnected: true);
-          bool hasChanges = false;
 
           for (final change in snapshot.docChanges) {
             final data = change.doc.data();
@@ -177,7 +201,12 @@ class ChatNotifier extends Notifier<ChatState> {
               final existingIndex = state.messages.indexWhere((m) => m.id == msgId);
               final isEncryptedPlaceholder = existingIndex >= 0 && state.messages[existingIndex].text.contains('[Encrypted');
 
-              if (existingIndex < 0 || isEncryptedPlaceholder) {
+              if (existingIndex >= 0 && !isEncryptedPlaceholder) {
+                if (state.messages[existingIndex].status != status) {
+                  _updateMessageStatusInMemory(msgId, status);
+                  unawaited(LocalDatabaseService.updateMessageStatus(msgId, status));
+                }
+              } else {
                 final isMe = senderUid == myUid;
                 String decryptedText = '';
 
@@ -207,26 +236,32 @@ class ChatNotifier extends Notifier<ChatState> {
                   status: status,
                 );
 
-                await LocalDatabaseService.saveMessage(localMsg);
-                hasChanges = true;
+                final updatedList = List<LocalChatMessage>.from(state.messages);
+                if (existingIndex >= 0) {
+                  updatedList[existingIndex] = localMsg;
+                } else {
+                  updatedList.add(localMsg);
+                }
+                state = state.copyWith(messages: updatedList);
+                unawaited(LocalDatabaseService.saveMessage(localMsg));
+              }
 
-                // Update receipt in Firestore if received by me
-                if (!isMe && recipientUid == myUid) {
-                  final newStatus = _isChatActive ? 'read' : 'delivered';
-                  try {
-                    await change.doc.reference.update({'status': newStatus});
-                  } catch (_) {}
+              // Update receipt in Firestore if received by me
+              if (senderUid != myUid && recipientUid == myUid) {
+                if (_isChatActive) {
+                  if (status != 'read') {
+                    unawaited(change.doc.reference.update({'status': 'read'}));
+                  }
+                } else {
+                  if (status == 'sent') {
+                    unawaited(change.doc.reference.update({'status': 'delivered'}));
+                  }
                 }
               }
             } else if (change.type == DocumentChangeType.modified) {
-              await LocalDatabaseService.updateMessageStatus(msgId, status);
-              hasChanges = true;
+              _updateMessageStatusInMemory(msgId, status);
+              unawaited(LocalDatabaseService.updateMessageStatus(msgId, status));
             }
-          }
-
-          if (hasChanges) {
-            final updated = await LocalDatabaseService.getMessagesForPeer(peerUid, myUid: myUid);
-            state = state.copyWith(messages: updated);
           }
         },
         onError: (error) {
@@ -236,6 +271,15 @@ class ChatNotifier extends Notifier<ChatState> {
       );
     } catch (e) {
       if (kDebugMode) debugPrint('[ChatProvider] Firestore connect error: $e');
+    }
+  }
+
+  void _updateMessageStatusInMemory(String msgId, String status) {
+    final idx = state.messages.indexWhere((m) => m.id == msgId);
+    if (idx != -1) {
+      final updatedList = List<LocalChatMessage>.from(state.messages);
+      updatedList[idx] = updatedList[idx].copyWith(status: status);
+      state = state.copyWith(messages: updatedList);
     }
   }
 
@@ -256,7 +300,7 @@ class ChatNotifier extends Notifier<ChatState> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final msgId = _uuid.v4();
 
-    // 1. Immediate optimistic save in SQLite (status: sending)
+    // 1. Immediate in-memory optimistic bubble (Frame 0 - 0ms latency)
     final pendingMsg = LocalChatMessage(
       id: msgId,
       senderUid: state.myUid,
@@ -266,9 +310,13 @@ class ChatNotifier extends Notifier<ChatState> {
       isMe: true,
       status: 'sending',
     );
-    await LocalDatabaseService.saveMessage(pendingMsg);
-    var localList = await LocalDatabaseService.getMessagesForPeer(peerUid);
-    state = state.copyWith(messages: localList, errorMessage: null);
+    state = state.copyWith(
+      messages: [...state.messages, pendingMsg],
+      errorMessage: null,
+    );
+
+    // Save to SQLite asynchronously
+    unawaited(LocalDatabaseService.saveMessage(pendingMsg));
 
     // 2. Encrypt with Signal Protocol session (ZERO plaintext over the wire)
     try {
@@ -301,19 +349,19 @@ class ChatNotifier extends Notifier<ChatState> {
             .doc(msgId)
             .set(rowData);
 
-        await LocalDatabaseService.updateMessageStatus(msgId, 'sent');
+        unawaited(LocalDatabaseService.updateMessageStatus(msgId, 'sent'));
+        _updateMessageStatusInMemory(msgId, 'sent');
       } else {
-        await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+        unawaited(LocalDatabaseService.updateMessageStatus(msgId, 'failed'));
+        _updateMessageStatusInMemory(msgId, 'failed');
         state = state.copyWith(errorMessage: 'Network error: Firebase not connected.');
       }
     } catch (e) {
       if (kDebugMode) debugPrint('[ChatProvider] Send message error: $e');
-      await LocalDatabaseService.updateMessageStatus(msgId, 'failed');
+      unawaited(LocalDatabaseService.updateMessageStatus(msgId, 'failed'));
+      _updateMessageStatusInMemory(msgId, 'failed');
       state = state.copyWith(errorMessage: 'Failed to send message: $e');
     }
-
-    localList = await LocalDatabaseService.getMessagesForPeer(peerUid);
-    state = state.copyWith(messages: localList);
   }
 
   /// Mark all received messages as read
@@ -322,22 +370,46 @@ class ChatNotifier extends Notifier<ChatState> {
     final channelId = state.channelId;
     if (peerUid == null || channelId == null) return;
 
+    // 1. Immediately update local database and in-memory state
+    await LocalDatabaseService.markAllReceivedMessagesAsRead(peerUid);
+    final hasUnread = state.messages.any((m) => !m.isMe && m.status != 'read');
+    if (hasUnread) {
+      final updated = state.messages.map((m) {
+        if (!m.isMe && m.status != 'read') {
+          return m.copyWith(status: 'read');
+        }
+        return m;
+      }).toList();
+      state = state.copyWith(messages: updated);
+    }
+
     final firestore = FirebaseConfig.firestore;
     if (firestore == null) return;
 
     try {
-      final unreadDocs = await firestore
+      final messagesSnap = await firestore
           .collection('chats')
           .doc(channelId)
           .collection('messages')
-          .where('recipient_uid', isEqualTo: state.myUid)
-          .where('status', isNotEqualTo: 'read')
           .get();
 
-      for (final doc in unreadDocs.docs) {
-        await doc.reference.update({'status': 'read'});
+      final batch = firestore.batch();
+      bool hasBatchDocs = false;
+      for (final doc in messagesSnap.docs) {
+        final data = doc.data();
+        final rUid = data['recipient_uid'] as String?;
+        final status = data['status'] as String?;
+        if (rUid == state.myUid && status != 'read') {
+          batch.update(doc.reference, {'status': 'read'});
+          hasBatchDocs = true;
+        }
       }
-    } catch (_) {}
+      if (hasBatchDocs) {
+        await batch.commit();
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[ChatProvider] markChatAsRead error: $e');
+    }
   }
 
   /// Retry sending a failed message

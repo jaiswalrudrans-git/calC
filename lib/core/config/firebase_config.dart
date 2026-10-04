@@ -6,6 +6,7 @@ import '../../firebase_options.dart';
 
 class FirebaseConfig {
   static bool _isInitialized = false;
+  static Future<void>? _initFuture;
 
   static bool get isConfigured => _isInitialized;
 
@@ -19,8 +20,13 @@ class FirebaseConfig {
     return FirebaseAuth.instance;
   }
 
-  /// Initialize Firebase app with error handling
-  static Future<void> init() async {
+  /// Initialize Firebase app with error handling (coalesces concurrent calls)
+  static Future<void> init() {
+    if (_isInitialized) return Future.value();
+    return _initFuture ??= _doInit();
+  }
+
+  static Future<void> _doInit() async {
     if (_isInitialized) return;
 
     try {

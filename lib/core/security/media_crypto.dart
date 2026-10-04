@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -23,63 +23,25 @@ class EncryptedMediaPayload {
 
 /// AES-256-GCM encryption service used for secure vault database backup payloads
 class MediaCryptoService {
-  static final _aesGcm = AesGcm.with256bits();
-  static final _random = Random.secure();
 
-  /// Encrypt arbitrary bytes using AES-256-GCM with a newly generated ephemeral key
+  /// Encrypt arbitrary bytes using AES-256-GCM on a background isolate
   static Future<EncryptedMediaPayload> encryptMediaBytes(Uint8List rawBytes) async {
-    // 1. Generate 256-bit AES key & 12-byte IV
-    final keyBytes = Uint8List(32);
-    final ivBytes = Uint8List(12);
-    for (int i = 0; i < 32; i++) {
-      keyBytes[i] = _random.nextInt(256);
-    }
-    for (int i = 0; i < 12; i++) {
-      ivBytes[i] = _random.nextInt(256);
-    }
-
-    final secretKey = SecretKey(keyBytes);
-
-    // 2. Encrypt with AES-GCM
-    final secretBox = await _aesGcm.encrypt(
-      rawBytes,
-      secretKey: secretKey,
-      nonce: ivBytes,
-    );
-
-    return EncryptedMediaPayload(
-      ciphertext: Uint8List.fromList(secretBox.cipherText),
-      keyHex: _bytesToHex(keyBytes),
-      ivHex: _bytesToHex(ivBytes),
-      macHex: _bytesToHex(secretBox.mac.bytes),
-      originalSize: rawBytes.length,
-    );
+    return compute(_encryptWorker, rawBytes);
   }
 
-  /// Decrypt bytes using AES-256-GCM
+  /// Decrypt bytes using AES-256-GCM on a background isolate
   static Future<Uint8List> decryptMediaBytes(
     Uint8List ciphertext, {
     required String keyHex,
     required String ivHex,
     required String macHex,
   }) async {
-    final keyBytes = _hexToBytes(keyHex);
-    final ivBytes = _hexToBytes(ivHex);
-    final macBytes = _hexToBytes(macHex);
-
-    final secretKey = SecretKey(keyBytes);
-    final secretBox = SecretBox(
-      ciphertext,
-      nonce: ivBytes,
-      mac: Mac(macBytes),
-    );
-
-    final decrypted = await _aesGcm.decrypt(
-      secretBox,
-      secretKey: secretKey,
-    );
-
-    return Uint8List.fromList(decrypted);
+    return compute(_decryptWorker, {
+      'ciphertext': ciphertext,
+      'keyHex': keyHex,
+      'ivHex': ivHex,
+      'macHex': macHex,
+    });
   }
 
   /// Get the app's private sandboxed directory
@@ -125,4 +87,58 @@ class MediaCryptoService {
     }
     return result;
   }
+}
+
+Future<EncryptedMediaPayload> _encryptWorker(Uint8List rawBytes) async {
+  final random = Random.secure();
+  final keyBytes = Uint8List(32);
+  final ivBytes = Uint8List(12);
+  for (int i = 0; i < 32; i++) {
+    keyBytes[i] = random.nextInt(256);
+  }
+  for (int i = 0; i < 12; i++) {
+    ivBytes[i] = random.nextInt(256);
+  }
+
+  final secretKey = SecretKey(keyBytes);
+  final aesGcm = AesGcm.with256bits();
+  final secretBox = await aesGcm.encrypt(
+    rawBytes,
+    secretKey: secretKey,
+    nonce: ivBytes,
+  );
+
+  return EncryptedMediaPayload(
+    ciphertext: Uint8List.fromList(secretBox.cipherText),
+    keyHex: MediaCryptoService._bytesToHex(keyBytes),
+    ivHex: MediaCryptoService._bytesToHex(ivBytes),
+    macHex: MediaCryptoService._bytesToHex(secretBox.mac.bytes),
+    originalSize: rawBytes.length,
+  );
+}
+
+Future<Uint8List> _decryptWorker(Map<String, dynamic> params) async {
+  final ciphertext = params['ciphertext'] as Uint8List;
+  final keyHex = params['keyHex'] as String;
+  final ivHex = params['ivHex'] as String;
+  final macHex = params['macHex'] as String;
+
+  final keyBytes = MediaCryptoService._hexToBytes(keyHex);
+  final ivBytes = MediaCryptoService._hexToBytes(ivHex);
+  final macBytes = MediaCryptoService._hexToBytes(macHex);
+
+  final secretKey = SecretKey(keyBytes);
+  final secretBox = SecretBox(
+    ciphertext,
+    nonce: ivBytes,
+    mac: Mac(macBytes),
+  );
+
+  final aesGcm = AesGcm.with256bits();
+  final decrypted = await aesGcm.decrypt(
+    secretBox,
+    secretKey: secretKey,
+  );
+
+  return Uint8List.fromList(decrypted);
 }

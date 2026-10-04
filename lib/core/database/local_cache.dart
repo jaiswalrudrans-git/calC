@@ -68,6 +68,38 @@ class LocalChatMessage {
       reaction: map['reaction'] as String?,
     );
   }
+
+  LocalChatMessage copyWith({
+    String? id,
+    String? senderUid,
+    String? receiverUid,
+    String? text,
+    int? timestamp,
+    int? expiresAt,
+    bool? isMe,
+    String? status,
+    String? mediaType,
+    String? localPath,
+    int? mediaSize,
+    int? duration,
+    String? reaction,
+  }) {
+    return LocalChatMessage(
+      id: id ?? this.id,
+      senderUid: senderUid ?? this.senderUid,
+      receiverUid: receiverUid ?? this.receiverUid,
+      text: text ?? this.text,
+      timestamp: timestamp ?? this.timestamp,
+      expiresAt: expiresAt ?? this.expiresAt,
+      isMe: isMe ?? this.isMe,
+      status: status ?? this.status,
+      mediaType: mediaType ?? this.mediaType,
+      localPath: localPath ?? this.localPath,
+      mediaSize: mediaSize ?? this.mediaSize,
+      duration: duration ?? this.duration,
+      reaction: reaction ?? this.reaction,
+    );
+  }
 }
 
 class ConversionRecord {
@@ -477,6 +509,16 @@ class LocalDatabaseService {
       'messages',
       {'status': 'read'},
       where: 'isMe = 1 AND receiverUid = ? AND status != "read"',
+      whereArgs: [peerUid],
+    );
+  }
+
+  static Future<void> markAllReceivedMessagesAsRead(String peerUid) async {
+    final db = await database;
+    await db.update(
+      'messages',
+      {'status': 'read'},
+      where: 'isMe = 0 AND senderUid = ? AND status != "read"',
       whereArgs: [peerUid],
     );
   }

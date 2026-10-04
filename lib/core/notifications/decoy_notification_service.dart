@@ -357,6 +357,16 @@ class DecoyNotificationService {
               if (recipientUid != myUid || senderUid == myUid) continue;
               if (status == 'read') continue;
 
+              // Immediately acknowledge delivery to the sender when this device receives the message
+              if (status == 'sent') {
+                unawaited(change.doc.reference.update({'status': 'delivered'}));
+              }
+
+              // If user is actively inside this conversation, ChatNotifier handles live decryption and UI
+              if (_activeConversationId == channelId) {
+                continue;
+              }
+
               // Check if already processed
               if (_processedMessageIds.contains(msgId)) continue;
               _processedMessageIds.add(msgId);
@@ -397,7 +407,6 @@ class DecoyNotificationService {
                     status: 'delivered',
                   );
                   await LocalDatabaseService.saveMessage(localMsg);
-                  unawaited(change.doc.reference.update({'status': 'delivered'}));
                 }
               } catch (_) {}
 

@@ -9,6 +9,8 @@ import '../../../core/security/secure_key_storage.dart';
 import '../../../core/notifications/decoy_notification_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../settings/screens/settings_screen.dart';
+import '../../../core/config/firebase_config.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/chat_contact.dart';
 import '../providers/chat_provider.dart';
 
@@ -32,12 +34,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Timer? _highlightTimer;
   int _previousMessageCount = 0;
   ChatNotifier? _chatNotifier;
+  bool _isNearBottom = true;
+  bool _hasNewUnreadWhileScrolled = false;
+  double _lastBottomInset = 0.0;
 
   @override
   void initState() {
     super.initState();
     _chatNotifier = ref.read(chatProvider.notifier);
     PrivacyGuard.setScreenProtection(true);
+
+    _scrollController.addListener(_onScroll);
+    _inputFocusNode.addListener(_onFocusChange);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (widget.contact != null) {
@@ -60,24 +68,61 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    // In reverse: true ListView, offset 0 is the bottom (latest message)
+    final nearBottom = _scrollController.offset <= 100;
+    if (nearBottom != _isNearBottom) {
+      setState(() {
+        _isNearBottom = nearBottom;
+        if (nearBottom) {
+          _hasNewUnreadWhileScrolled = false;
+        }
+      });
+    }
+  }
+
+  Timer? _focusTimer;
+
+  void _onFocusChange() {
+    if (_inputFocusNode.hasFocus && _isNearBottom) {
+      _focusTimer?.cancel();
+      _focusTimer = Timer(const Duration(milliseconds: 100), () {
+        if (mounted && _isNearBottom) {
+          _scrollToBottom();
+        }
+      });
+    }
+  }
+
   @override
   void dispose() {
     DecoyNotificationService.instance.setActiveConversation(null);
     _highlightTimer?.cancel();
+    _focusTimer?.cancel();
     _searchController.dispose();
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _inputFocusNode.removeListener(_onFocusChange);
     _inputFocusNode.dispose();
     _chatNotifier?.setChatActive(false);
     super.dispose();
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool animate = true}) {
     if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent + 60,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+      if (animate) {
+        _scrollController.animateTo(
+          0.0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      } else {
+        _scrollController.jumpTo(0.0);
+      }
+    }
+    if (_hasNewUnreadWhileScrolled) {
+      setState(() => _hasNewUnreadWhileScrolled = false);
     }
   }
 
@@ -312,10 +357,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ? 'Peer ${chatState.peerUid!.substring(0, 6)}'
             : 'Encrypted Chat');
 
-    // Auto-scroll on new incoming message
+    final activePeerUid = widget.contact?.uid ?? chatState.peerUid ?? '';
+
+    // Handle bottom inset changes (keyboard opens/closes)
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    if (bottomInset > _lastBottomInset && _isNearBottom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _isNearBottom) {
+          _scrollToBottom();
+        }
+      });
+    }
+    _lastBottomInset = bottomInset;
+
+    // Auto-scroll on new incoming message only if near bottom
     if (chatState.messages.length > _previousMessageCount) {
+      final isFirstLoad = _previousMessageCount == 0;
       _previousMessageCount = chatState.messages.length;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      if (!isFirstLoad) {
+        if (_isNearBottom) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+        } else {
+          if (!_hasNewUnreadWhileScrolled) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(() => _hasNewUnreadWhileScrolled = true);
+            });
+          }
+        }
+      } else {
+        // First load opens already scrolled to latest message
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom(animate: false));
+      }
+    } else if (chatState.messages.length < _previousMessageCount) {
+      _previousMessageCount = chatState.messages.length;
     }
 
     final filteredMessages = _searchQuery.isEmpty
@@ -323,6 +397,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         : chatState.messages.where((m) => m.text.toLowerCase().contains(_searchQuery)).toList();
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: isDark ? MetricColors.background : const Color(0xFFF6F8FC),
       appBar: AppBar(
         backgroundColor: isDark ? MetricColors.background : Colors.white,
@@ -390,15 +465,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               ),
                           ],
                         ),
-                        Text(
-                          chatState.isRealtimeConnected ? 'End-to-End Encrypted' : 'Encrypted (Offline)',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: chatState.isRealtimeConnected
-                                ? AppColors.secureGreen
-                                : (isDark ? AppColors.textMutedDark : AppColors.textMutedLight),
-                          ),
-                        ),
+                        _PresenceSubtitle(peerUid: activePeerUid, isDark: isDark),
                       ],
                     ),
                   ),
@@ -491,12 +558,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 children: [
                   Icon(Icons.lock_rounded, size: 12, color: isDark ? MetricColors.textMuted : AppColors.textSecondaryLight),
                   const SizedBox(width: 6),
-                  Text(
-                    'Messages are end-to-end encrypted with Signal Double Ratchet',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: isDark ? MetricColors.textMuted : AppColors.textSecondaryLight,
+                  Flexible(
+                    child: Text(
+                      'Messages are end-to-end encrypted with Signal Double Ratchet',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? MetricColors.textMuted : AppColors.textSecondaryLight,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -531,14 +601,104 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             ],
                           ),
                         )
-                      : ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                          itemCount: filteredMessages.length,
-                          itemBuilder: (ctx, index) {
-                            final msg = filteredMessages[index];
-                            return _buildMessageBubble(msg, isDark);
-                          },
+                      : Stack(
+                          children: [
+                            ListView.builder(
+                              controller: _scrollController,
+                              reverse: true,
+                              physics: const AlwaysScrollableScrollPhysics(
+                                parent: BouncingScrollPhysics(),
+                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                              itemCount: filteredMessages.length,
+                              findChildIndexCallback: (Key key) {
+                                if (key is ValueKey<String>) {
+                                  final id = key.value;
+                                  for (int i = 0; i < filteredMessages.length; i++) {
+                                    if (filteredMessages[filteredMessages.length - 1 - i].id == id) {
+                                      return i;
+                                    }
+                                  }
+                                }
+                                return null;
+                              },
+                              itemBuilder: (ctx, index) {
+                                final msg = filteredMessages[filteredMessages.length - 1 - index];
+                                final isMe = (chatState.myUid.isNotEmpty)
+                                    ? msg.senderUid == chatState.myUid
+                                    : msg.isMe;
+                                return _MessageBubble(
+                                  key: ValueKey(msg.id),
+                                  msg: msg,
+                                  isDark: isDark,
+                                  isMe: isMe,
+                                  isHighlighted: msg.id == _highlightedMessageId,
+                                  onLongPress: () => _onMessageLongPress(msg),
+                                  onRetry: () => ref.read(chatProvider.notifier).retryMessage(msg.id),
+                                );
+                              },
+                            ),
+                            if (!_isNearBottom)
+                              Positioned(
+                                bottom: 12,
+                                right: 16,
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(22),
+                                    onTap: () => _scrollToBottom(),
+                                    child: Container(
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: _hasNewUnreadWhileScrolled ? 14 : 10,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: isDark ? const Color(0xFF1E2433) : Colors.white,
+                                        borderRadius: BorderRadius.circular(22),
+                                        border: Border.all(
+                                          color: _hasNewUnreadWhileScrolled
+                                              ? MetricChatColors.receivedText
+                                              : (isDark ? MetricGlass.border : AppColors.cardBorderLight),
+                                          width: 1.2,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(alpha: 0.18),
+                                            blurRadius: 10,
+                                            offset: const Offset(0, 3),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.arrow_downward_rounded,
+                                            size: 16,
+                                            color: _hasNewUnreadWhileScrolled
+                                                ? MetricChatColors.receivedText
+                                                : (isDark ? MetricColors.textPrimary : Colors.black87),
+                                          ),
+                                          if (_hasNewUnreadWhileScrolled) ...[
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              'New message',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: _hasNewUnreadWhileScrolled
+                                                    ? MetricChatColors.receivedText
+                                                    : (isDark ? MetricColors.textPrimary : Colors.black87),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
             ),
 
@@ -548,7 +708,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               focusNode: _inputFocusNode,
               onSend: (text) {
                 ref.read(chatProvider.notifier).sendMessage(text);
-                Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom());
+                _scrollToBottom();
               },
             ),
           ],
@@ -556,100 +716,136 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
     );
   }
+}
 
-  Widget _buildMessageBubble(LocalChatMessage msg, bool isDark) {
-    final chatState = ref.watch(chatProvider);
-    final isMe = (chatState.myUid.isNotEmpty)
-        ? msg.senderUid == chatState.myUid
-        : msg.isMe;
-    final timeStr = DateFormat('hh:mm a').format(DateTime.fromMillisecondsSinceEpoch(msg.timestamp));
-    final isHighlighted = msg.id == _highlightedMessageId;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          GestureDetector(
-            onLongPress: () => _onMessageLongPress(msg),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.78,
-              ),
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-              decoration: BoxDecoration(
-                color: isMe
-                    ? (isDark ? MetricChatColors.sentBubble : const Color(0xFFE5E7EB))
-                    : (isDark ? MetricChatColors.receivedBubble : Colors.white),
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: Radius.circular(isMe ? 18 : 4),
-                  bottomRight: Radius.circular(isMe ? 4 : 18),
+/// Keyed, isolated message bubble wrapped in RepaintBoundary to eliminate O(N) rebuilds
+class _MessageBubble extends StatelessWidget {
+  final LocalChatMessage msg;
+  final bool isDark;
+  final bool isMe;
+  final bool isHighlighted;
+  final VoidCallback onLongPress;
+  final VoidCallback onRetry;
+
+  const _MessageBubble({
+    super.key,
+    required this.msg,
+    required this.isDark,
+    required this.isMe,
+    required this.isHighlighted,
+    required this.onLongPress,
+    required this.onRetry,
+  });
+
+  static final DateFormat _timeFormatter = DateFormat('hh:mm a');
+
+  @override
+  Widget build(BuildContext context) {
+    final timeStr = _timeFormatter.format(DateTime.fromMillisecondsSinceEpoch(msg.timestamp));
+
+    return RepaintBoundary(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            GestureDetector(
+              onLongPress: onLongPress,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width * 0.78,
                 ),
-                border: Border.all(
-                  color: isHighlighted
-                      ? MetricChatColors.receivedText
-                      : (isDark
-                          ? (isMe ? MetricChatColors.sentBorder : MetricChatColors.receivedBorder)
-                          : Colors.black.withValues(alpha: 0.08)),
-                  width: isHighlighted ? 1.5 : 1.0,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    msg.text,
-                    style: TextStyle(
-                      fontSize: 15,
-                      height: 1.35,
-                      color: isMe
-                          ? (isDark ? MetricChatColors.sentText : const Color(0xFF111827))
-                          : (isDark ? MetricChatColors.receivedText : const Color(0xFF0F766E)),
-                      fontWeight: FontWeight.w400,
-                    ),
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+                decoration: BoxDecoration(
+                  color: isMe
+                      ? (isDark ? MetricChatColors.sentBubble : const Color(0x80E5E7EB))
+                      : (isDark ? MetricChatColors.receivedBubble : const Color(0x80FFFFFF)),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(18),
+                    topRight: const Radius.circular(18),
+                    bottomLeft: Radius.circular(isMe ? 18 : 4),
+                    bottomRight: Radius.circular(isMe ? 4 : 18),
                   ),
-                  const SizedBox(height: 3),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        timeStr,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: isDark ? MetricChatColors.timestamp : Colors.black45,
-                        ),
+                  border: Border.all(
+                    color: isHighlighted
+                        ? (isDark ? Colors.white70 : Colors.black54)
+                        : (isDark
+                            ? (isMe ? MetricChatColors.sentBorder : MetricChatColors.receivedBorder)
+                            : Colors.black.withValues(alpha: 0.08)),
+                    width: isHighlighted ? 1.5 : 1.0,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      msg.text,
+                      style: TextStyle(
+                        fontSize: 15,
+                        height: 1.35,
+                        color: isMe
+                            ? (isDark ? MetricChatColors.sentText : const Color(0xFF111827))
+                            : (isDark ? MetricChatColors.receivedText : const Color(0xFF111827)),
+                        fontWeight: FontWeight.w400,
                       ),
-                      if (isMe) ...[
-                        const SizedBox(width: 4),
-                        _buildStatusIndicator(msg, isDark),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          timeStr,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: isDark ? MetricChatColors.timestamp : Colors.black45,
+                          ),
+                        ),
+                        if (isMe) ...[
+                          const SizedBox(width: 4),
+                          _StatusIndicator(
+                            status: msg.status,
+                            isDark: isDark,
+                            onRetry: onRetry,
+                          ),
+                        ],
                       ],
-                    ],
-                  ),
-                ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+}
 
-  Widget _buildStatusIndicator(LocalChatMessage msg, bool isDark) {
-    if (msg.status == 'sending') {
+class _StatusIndicator extends StatelessWidget {
+  final String status;
+  final bool isDark;
+  final VoidCallback onRetry;
+
+  const _StatusIndicator({
+    required this.status,
+    required this.isDark,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == 'sending') {
       return const SizedBox(
         width: 10,
         height: 10,
         child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey),
       );
-    } else if (msg.status == 'failed') {
+    } else if (status == 'failed') {
       return GestureDetector(
-        onTap: () {
-          ref.read(chatProvider.notifier).retryMessage(msg.id);
-        },
+        onTap: onRetry,
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -659,13 +855,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
       );
-    } else if (msg.status == 'read') {
+    } else if (status == 'read') {
       return const Icon(
         Icons.done_all_rounded,
         size: 15,
         color: MetricChatColors.readReceipt,
       );
-    } else if (msg.status == 'delivered') {
+    } else if (status == 'delivered') {
       return Icon(
         Icons.done_all_rounded,
         size: 15,
@@ -680,6 +876,147 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 }
+
+/// Isolated widget for real-time presence to prevent whole chat screen invalidation
+class _PresenceSubtitle extends StatefulWidget {
+  final String peerUid;
+  final bool isDark;
+
+  const _PresenceSubtitle({
+    required this.peerUid,
+    required this.isDark,
+  });
+
+  @override
+  State<_PresenceSubtitle> createState() => _PresenceSubtitleState();
+}
+
+class _PresenceSubtitleState extends State<_PresenceSubtitle> {
+  StreamSubscription<DocumentSnapshot>? _sub;
+  bool _isOnline = false;
+  int? _lastSeen;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PresenceSubtitle oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.peerUid != widget.peerUid) {
+      _sub?.cancel();
+      _subscribe();
+    }
+  }
+
+  void _subscribe() {
+    if (widget.peerUid.isEmpty) return;
+    final firestore = FirebaseConfig.firestore;
+    if (firestore == null) return;
+
+    _sub = firestore.collection('users').doc(widget.peerUid).snapshots().listen((doc) {
+      if (!mounted) return;
+      if (!doc.exists) {
+        setState(() {
+          _isOnline = false;
+          _lastSeen = null;
+        });
+        return;
+      }
+      final data = doc.data();
+      if (data == null) return;
+
+      final isOnline = data['is_online'] as bool? ?? false;
+      final lastSeen = (data['last_seen'] as num?)?.toInt() ??
+          (data['updated_at'] as num?)?.toInt() ??
+          (data['created_at'] as num?)?.toInt();
+
+      setState(() {
+        _isOnline = isOnline;
+        _lastSeen = lastSeen;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isOnline) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: const BoxDecoration(
+              color: MetricChatColors.onlineGreen,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 5),
+          const Text(
+            'Online',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: MetricChatColors.onlineGreen,
+            ),
+          ),
+        ],
+      );
+    } else if (_lastSeen != null) {
+      return Text(
+        _formatLastSeen(_lastSeen!),
+        style: TextStyle(
+          fontSize: 11,
+          color: widget.isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+        ),
+      );
+    } else {
+      return Text(
+        'Offline',
+        style: TextStyle(
+          fontSize: 11,
+          color: widget.isDark ? AppColors.textMutedDark : AppColors.textMutedLight,
+        ),
+      );
+    }
+  }
+
+  static String _formatLastSeen(int timestampMs) {
+    final lastSeen = DateTime.fromMillisecondsSinceEpoch(timestampMs);
+    final now = DateTime.now();
+    final difference = now.difference(lastSeen);
+
+    final isToday = now.year == lastSeen.year && now.month == lastSeen.month && now.day == lastSeen.day;
+    final yesterday = now.subtract(const Duration(days: 1));
+    final isYesterday = yesterday.year == lastSeen.year && yesterday.month == lastSeen.month && yesterday.day == lastSeen.day;
+
+    final timeStr = DateFormat('h:mm a').format(lastSeen);
+
+    if (difference.inSeconds < 60) {
+      return 'Last seen just now';
+    } else if (isToday) {
+      return 'Last seen today at $timeStr';
+    } else if (isYesterday) {
+      return 'Last seen yesterday at $timeStr';
+    } else if (difference.inDays < 7) {
+      final dayStr = DateFormat('EEE').format(lastSeen);
+      return 'Last seen $dayStr at $timeStr';
+    } else {
+      final dateStr = DateFormat('MMM d').format(lastSeen);
+      return 'Last seen $dateStr';
+    }
+  }
+}
+
 
 /// Pure text input bar with no media buttons
 class _TextInputBar extends StatefulWidget {

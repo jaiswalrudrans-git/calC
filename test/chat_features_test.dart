@@ -28,6 +28,21 @@ void main() {
       // Send button is present
       expect(find.byIcon(Icons.arrow_upward_rounded), findsOneWidget);
     });
+    testWidgets('ChatScreen Scaffold has resizeToAvoidBottomInset: true',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(
+            home: ChatScreen(),
+          ),
+        ),
+      );
+
+      final scaffoldFinder = find.byType(Scaffold);
+      expect(scaffoldFinder, findsOneWidget);
+      final scaffold = tester.widget<Scaffold>(scaffoldFinder);
+      expect(scaffold.resizeToAvoidBottomInset, isTrue);
+    });
   });
 
   group('Read Receipts Tick System Tests', () {

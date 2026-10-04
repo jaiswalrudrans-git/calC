@@ -13,6 +13,7 @@ import '../../auth/services/account_auth_service.dart';
 import '../../converter/screens/converter_home_screen.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../models/chat_contact.dart';
+import '../services/presence_service.dart';
 import 'chat_screen.dart';
 
 class ChatListHomeScreen extends StatefulWidget {
@@ -32,30 +33,39 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
   String? _connectCode;
   List<ChatContact> _contacts = [];
   Map<String, LocalChatMessage?> _lastMessages = {};
+  final Map<String, StreamSubscription<DocumentSnapshot>> _peerPresenceSubs = {};
+  final Map<String, bool> _onlineContacts = {};
   bool _isLoading = true;
   StreamSubscription<DocumentSnapshot>? _userDocSub;
 
   @override
   void initState() {
     super.initState();
+    PresenceService.instance.enterChatApp();
     _loadState();
   }
 
   @override
   void dispose() {
     _userDocSub?.cancel();
+    for (final sub in _peerPresenceSubs.values) {
+      sub.cancel();
+    }
+    _peerPresenceSubs.clear();
+    PresenceService.instance.exitChatApp();
     super.dispose();
   }
 
   Future<void> _loadState() async {
+    await FirebaseConfig.init();
     final user = await AccountAuthService.getCurrentUsername();
     final code = await AccountAuthService.getCurrentConnectCode();
     var contactsList = await SecureKeyStorage.getContacts();
     final myUid = await AccountAuthService.getCurrentUserUid();
+    final firestore = FirebaseConfig.firestore;
 
     // Sync with Firestore contacts (both for restoring and discovering peer additions)
     if (myUid != null && myUid.isNotEmpty) {
-      final firestore = FirebaseConfig.firestore;
       if (firestore != null) {
         try {
           final userDoc = await firestore.collection('users').doc(myUid).get();
@@ -111,6 +121,22 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     final Map<String, LocalChatMessage?> lastMsgs = {};
     for (final contact in contactsList) {
       lastMsgs[contact.uid] = await LocalDatabaseService.getLastMessageForPeer(contact.uid, myUid: myUid);
+    }
+
+    if (firestore != null) {
+      for (final contact in contactsList) {
+        if (!_peerPresenceSubs.containsKey(contact.uid)) {
+          _peerPresenceSubs[contact.uid] = firestore.collection('users').doc(contact.uid).snapshots().listen((snap) {
+            if (!mounted) return;
+            final isOnline = snap.exists ? (snap.data()?['is_online'] as bool? ?? false) : false;
+            if (_onlineContacts[contact.uid] != isOnline) {
+              setState(() {
+                _onlineContacts[contact.uid] = isOnline;
+              });
+            }
+          });
+        }
+      }
     }
 
     if (mounted) {
@@ -577,6 +603,9 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           : RefreshIndicator(
               onRefresh: _loadState,
               child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 children: [
                   // My Connect Code Banner
@@ -756,15 +785,19 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
     );
   }
 
+  static final DateFormat _cardTimeFormat = DateFormat('hh:mm a');
+
   Widget _buildContactCard(ChatContact contact, bool isDark) {
     final lastMsg = _lastMessages[contact.uid];
     final lastText = lastMsg != null ? lastMsg.text : 'Encrypted conversation ready';
     final timeStr = lastMsg != null
-        ? DateFormat('hh:mm a').format(DateTime.fromMillisecondsSinceEpoch(lastMsg.timestamp))
+        ? _cardTimeFormat.format(DateTime.fromMillisecondsSinceEpoch(lastMsg.timestamp))
         : '';
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+    return RepaintBoundary(
+      key: ValueKey(contact.uid),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: isDark ? MetricGlass.level1 : Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -778,30 +811,76 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
         borderRadius: BorderRadius.circular(16),
         child: ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          leading: CircleAvatar(
-            radius: 22,
-            backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade200,
-            child: Text(
-              contact.username.isNotEmpty ? contact.username[0].toUpperCase() : '?',
-              style: TextStyle(
-                color: isDark ? MetricColors.textPrimary : Colors.black87,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
+          leading: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: isDark ? MetricGlass.level2 : Colors.grey.shade200,
+                child: Text(
+                  contact.username.isNotEmpty ? contact.username[0].toUpperCase() : '?',
+                  style: TextStyle(
+                    color: isDark ? MetricColors.textPrimary : Colors.black87,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
               ),
-            ),
+              if (_onlineContacts[contact.uid] == true)
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: MetricChatColors.onlineGreen,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: isDark ? MetricColors.background : Colors.white,
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           title: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Text(
-                  contact.username,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        contact.username,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (_onlineContacts[contact.uid] == true) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                        decoration: BoxDecoration(
+                          color: MetricChatColors.onlineGreen.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'Online',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: MetricChatColors.onlineGreen,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               if (timeStr.isNotEmpty)
@@ -849,6 +928,7 @@ class _ChatListHomeScreenState extends State<ChatListHomeScreen> {
           onTap: () => _openChat(contact),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
