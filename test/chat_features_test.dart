@@ -46,7 +46,7 @@ void main() {
   });
 
   group('Read Receipts Tick System Tests', () {
-    testWidgets('ChatScreen renders correctly with provider', (WidgetTester tester) async {
+    testWidgets('ChatScreen renders correctly with provider and PopScope', (WidgetTester tester) async {
       await tester.pumpWidget(
         const ProviderScope(
           child: MaterialApp(
@@ -56,6 +56,7 @@ void main() {
       );
 
       expect(find.byType(ChatScreen), findsOneWidget);
+      expect(find.byWidgetPredicate((w) => w is PopScope), findsOneWidget);
     });
 
     testWidgets('Status indicator logic renders correct tick icons and colors', (WidgetTester tester) async {

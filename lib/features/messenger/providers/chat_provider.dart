@@ -261,6 +261,11 @@ class ChatNotifier extends Notifier<ChatState> {
             } else if (change.type == DocumentChangeType.modified) {
               _updateMessageStatusInMemory(msgId, status);
               unawaited(LocalDatabaseService.updateMessageStatus(msgId, status));
+            } else if (change.type == DocumentChangeType.removed) {
+              // Peer or sender deleted this message: remove from UI and local SQLite in real time
+              final updatedList = state.messages.where((m) => m.id != msgId).toList();
+              state = state.copyWith(messages: updatedList);
+              unawaited(LocalDatabaseService.deleteMessage(msgId));
             }
           }
         },
@@ -421,18 +426,21 @@ class ChatNotifier extends Notifier<ChatState> {
     await sendMessage(failedMsg.text);
   }
 
-  /// Delete message from local storage and Cloud Firestore
+  /// Delete single message:
+  /// - Sent messages are deleted locally and purged from Cloud Firestore (triggering real-time removal on peer device)
+  /// - Received messages are removed from local view only (leaving Firestore intact for the peer)
   Future<void> deleteMessage(String id) async {
+    final msgIndex = state.messages.indexWhere((m) => m.id == id);
+    final msg = msgIndex >= 0 ? state.messages[msgIndex] : null;
+    final isMe = msg != null ? (msg.isMe || (state.myUid.isNotEmpty && msg.senderUid == state.myUid)) : false;
+
     await LocalDatabaseService.deleteMessage(id);
-    final peerUid = state.peerUid;
-    if (peerUid != null) {
-      final updated = await LocalDatabaseService.getMessagesForPeer(peerUid);
-      state = state.copyWith(messages: updated);
-    }
+    final updated = state.messages.where((m) => m.id != id).toList();
+    state = state.copyWith(messages: updated);
 
     final channelId = state.channelId;
     final firestore = FirebaseConfig.firestore;
-    if (channelId != null && firestore != null) {
+    if (isMe && channelId != null && firestore != null) {
       try {
         await firestore
             .collection('chats')
@@ -441,6 +449,58 @@ class ChatNotifier extends Notifier<ChatState> {
             .doc(id)
             .delete();
       } catch (_) {}
+    }
+  }
+
+  /// Batch delete multiple messages (WhatsApp style):
+  /// - Sent messages are deleted locally and purged from Cloud Firestore (batch delete)
+  /// - Received messages are removed from local storage only
+  Future<void> deleteMessages(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final idSet = ids.toSet();
+
+    final toDeleteFromFirestore = <String>[];
+    for (final m in state.messages) {
+      if (idSet.contains(m.id)) {
+        final isMe = m.isMe || (state.myUid.isNotEmpty && m.senderUid == state.myUid);
+        if (isMe) {
+          toDeleteFromFirestore.add(m.id);
+        }
+      }
+    }
+
+    // 1. Delete all selected messages from local SQLite
+    for (final id in ids) {
+      await LocalDatabaseService.deleteMessage(id);
+    }
+
+    // 2. Remove all selected messages from in-memory state
+    final updated = state.messages.where((m) => !idSet.contains(m.id)).toList();
+    state = state.copyWith(messages: updated);
+
+    // 3. Purge sent messages from Cloud Firestore
+    final channelId = state.channelId;
+    final firestore = FirebaseConfig.firestore;
+    if (channelId != null && firestore != null && toDeleteFromFirestore.isNotEmpty) {
+      try {
+        final batch = firestore.batch();
+        final coll = firestore.collection('chats').doc(channelId).collection('messages');
+        for (final id in toDeleteFromFirestore) {
+          batch.delete(coll.doc(id));
+        }
+        await batch.commit();
+      } catch (_) {
+        for (final id in toDeleteFromFirestore) {
+          try {
+            await firestore
+                .collection('chats')
+                .doc(channelId)
+                .collection('messages')
+                .doc(id)
+                .delete();
+          } catch (_) {}
+        }
+      }
     }
   }
 

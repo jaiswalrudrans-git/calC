@@ -305,43 +305,94 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  void _onMessageLongPress(LocalChatMessage msg) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  final Set<String> _selectedMessageIds = <String>{};
 
-    showModalBottomSheet(
+  bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
+
+  void _toggleMessageSelection(String id) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (_selectedMessageIds.contains(id)) {
+        _selectedMessageIds.remove(id);
+      } else {
+        _selectedMessageIds.add(id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedMessageIds.clear();
+    });
+  }
+
+  void _onMessageLongPress(LocalChatMessage msg) {
+    if (!_isSelectionMode) {
+      HapticFeedback.mediumImpact();
+      setState(() {
+        _selectedMessageIds.add(msg.id);
+      });
+    } else {
+      _toggleMessageSelection(msg.id);
+    }
+  }
+
+  void _onMessageTap(LocalChatMessage msg) {
+    if (_isSelectionMode) {
+      _toggleMessageSelection(msg.id);
+    }
+  }
+
+  void _copySelectedMessages(List<LocalChatMessage> messages) {
+    final selectedMsgs = messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    final combinedText = selectedMsgs.map((m) => m.text).join('\n');
+    Clipboard.setData(ClipboardData(text: combinedText));
+    final count = _selectedMessageIds.length;
+    _clearSelection();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(count == 1 ? 'Message copied to clipboard' : '$count messages copied')),
+      );
+    }
+  }
+
+  void _confirmDeleteSelected() {
+    final count = _selectedMessageIds.length;
+    if (count == 0) return;
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
       context: context,
-      backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: Icon(Icons.copy_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
-                title: const Text('Copy Text'),
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: msg.text));
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Message copied to clipboard')),
-                  );
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.delete_outline_rounded, color: AppColors.alertRed),
-                title: const Text('Delete Message', style: TextStyle(color: AppColors.alertRed)),
-                onTap: () {
-                  ref.read(chatProvider.notifier).deleteMessage(msg.id);
-                  Navigator.pop(ctx);
-                },
-              ),
-            ],
-          ),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Delete $count ${count == 1 ? "message" : "messages"}?'),
+        content: Text(
+          count == 1
+              ? 'Are you sure you want to delete this message?'
+              : 'Are you sure you want to delete these $count messages?',
+          style: TextStyle(color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final idsToDelete = _selectedMessageIds.toList();
+              _clearSelection();
+              await ref.read(chatProvider.notifier).deleteMessages(idsToDelete);
+            },
+            style: FilledButton.styleFrom(backgroundColor: AppColors.alertRed),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
   }
@@ -396,19 +447,58 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ? chatState.messages
         : chatState.messages.where((m) => m.text.toLowerCase().contains(_searchQuery)).toList();
 
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: isDark ? MetricColors.background : const Color(0xFFF6F8FC),
-      appBar: AppBar(
-        backgroundColor: isDark ? MetricColors.background : Colors.white,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        titleSpacing: 0,
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: isDark ? MetricColors.textPrimary : Colors.black87),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: _isSearching
+    return PopScope(
+      canPop: !_isSelectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _isSelectionMode) {
+          _clearSelection();
+        }
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: true,
+        backgroundColor: isDark ? MetricColors.background : const Color(0xFFF6F8FC),
+        appBar: _isSelectionMode
+            ? AppBar(
+                backgroundColor: isDark ? MetricColors.surface : Colors.white,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                leading: IconButton(
+                  icon: Icon(Icons.close_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
+                  onPressed: _clearSelection,
+                  tooltip: 'Cancel',
+                ),
+                title: Text(
+                  '${_selectedMessageIds.length}',
+                  style: TextStyle(
+                    color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                actions: [
+                  IconButton(
+                    icon: Icon(Icons.copy_rounded, color: isDark ? MetricColors.textPrimary : Colors.black87),
+                    tooltip: 'Copy',
+                    onPressed: () => _copySelectedMessages(filteredMessages),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, color: AppColors.alertRed),
+                    tooltip: 'Delete',
+                    onPressed: _confirmDeleteSelected,
+                  ),
+                  const SizedBox(width: 4),
+                ],
+              )
+            : AppBar(
+                backgroundColor: isDark ? MetricColors.background : Colors.white,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                titleSpacing: 0,
+                leading: IconButton(
+                  icon: Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: isDark ? MetricColors.textPrimary : Colors.black87),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                title: _isSearching
             ? TextField(
                 controller: _searchController,
                 autofocus: true,
@@ -609,7 +699,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               physics: const AlwaysScrollableScrollPhysics(
                                 parent: BouncingScrollPhysics(),
                               ),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                               itemCount: filteredMessages.length,
                               findChildIndexCallback: (Key key) {
                                 if (key is ValueKey<String>) {
@@ -627,12 +717,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 final isMe = (chatState.myUid.isNotEmpty)
                                     ? msg.senderUid == chatState.myUid
                                     : msg.isMe;
+                                final isSelected = _selectedMessageIds.contains(msg.id);
                                 return _MessageBubble(
                                   key: ValueKey(msg.id),
                                   msg: msg,
                                   isDark: isDark,
                                   isMe: isMe,
+                                  isSelected: isSelected,
                                   isHighlighted: msg.id == _highlightedMessageId,
+                                  onTap: () => _onMessageTap(msg),
                                   onLongPress: () => _onMessageLongPress(msg),
                                   onRetry: () => ref.read(chatProvider.notifier).retryMessage(msg.id),
                                 );
@@ -714,7 +807,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 }
 
@@ -724,7 +818,9 @@ class _MessageBubble extends StatelessWidget {
   final LocalChatMessage msg;
   final bool isDark;
   final bool isMe;
+  final bool isSelected;
   final bool isHighlighted;
+  final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onRetry;
 
@@ -733,7 +829,9 @@ class _MessageBubble extends StatelessWidget {
     required this.msg,
     required this.isDark,
     required this.isMe,
+    required this.isSelected,
     required this.isHighlighted,
+    required this.onTap,
     required this.onLongPress,
     required this.onRetry,
   });
@@ -745,79 +843,88 @@ class _MessageBubble extends StatelessWidget {
     final timeStr = _timeFormatter.format(DateTime.fromMillisecondsSinceEpoch(msg.timestamp));
 
     return RepaintBoundary(
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Row(
-          mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            GestureDetector(
-              onLongPress: onLongPress,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.sizeOf(context).width * 0.78,
-                ),
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-                decoration: BoxDecoration(
-                  color: isMe
-                      ? (isDark ? MetricChatColors.sentBubble : const Color(0x80E5E7EB))
-                      : (isDark ? MetricChatColors.receivedBubble : const Color(0x80FFFFFF)),
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(18),
-                    topRight: const Radius.circular(18),
-                    bottomLeft: Radius.circular(isMe ? 18 : 4),
-                    bottomRight: Radius.circular(isMe ? 4 : 18),
+      child: Container(
+        color: isSelected
+            ? (isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0x3325D366))
+            : Colors.transparent,
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              GestureDetector(
+                onTap: onTap,
+                onLongPress: onLongPress,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.78,
                   ),
-                  border: Border.all(
-                    color: isHighlighted
-                        ? (isDark ? Colors.white70 : Colors.black54)
-                        : (isDark
-                            ? (isMe ? MetricChatColors.sentBorder : MetricChatColors.receivedBorder)
-                            : Colors.black.withValues(alpha: 0.08)),
-                    width: isHighlighted ? 1.5 : 1.0,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      msg.text,
-                      style: TextStyle(
-                        fontSize: 15,
-                        height: 1.35,
-                        color: isMe
-                            ? (isDark ? MetricChatColors.sentText : const Color(0xFF111827))
-                            : (isDark ? MetricChatColors.receivedText : const Color(0xFF111827)),
-                        fontWeight: FontWeight.w400,
-                      ),
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+                  decoration: BoxDecoration(
+                    color: isMe
+                        ? (isDark ? MetricChatColors.sentBubble : const Color(0x80E5E7EB))
+                        : (isDark ? MetricChatColors.receivedBubble : const Color(0x80FFFFFF)),
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(18),
+                      topRight: const Radius.circular(18),
+                      bottomLeft: Radius.circular(isMe ? 18 : 4),
+                      bottomRight: Radius.circular(isMe ? 4 : 18),
                     ),
-                    const SizedBox(height: 3),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          timeStr,
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: isDark ? MetricChatColors.timestamp : Colors.black45,
-                          ),
+                    border: Border.all(
+                      color: isSelected
+                          ? AppColors.primary
+                          : (isHighlighted
+                              ? (isDark ? Colors.white70 : Colors.black54)
+                              : (isDark
+                                  ? (isMe ? MetricChatColors.sentBorder : MetricChatColors.receivedBorder)
+                                  : Colors.black.withValues(alpha: 0.08))),
+                      width: isSelected ? 2.0 : (isHighlighted ? 1.5 : 1.0),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        msg.text,
+                        style: TextStyle(
+                          fontSize: 15,
+                          height: 1.35,
+                          color: isMe
+                              ? (isDark ? MetricChatColors.sentText : const Color(0xFF111827))
+                              : (isDark ? MetricChatColors.receivedText : const Color(0xFF111827)),
+                          fontWeight: FontWeight.w400,
                         ),
-                        if (isMe) ...[
-                          const SizedBox(width: 4),
-                          _StatusIndicator(
-                            status: msg.status,
-                            isDark: isDark,
-                            onRetry: onRetry,
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            timeStr,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: isDark ? MetricChatColors.timestamp : Colors.black45,
+                            ),
                           ),
+                          if (isMe) ...[
+                            const SizedBox(width: 4),
+                            _StatusIndicator(
+                              status: msg.status,
+                              isDark: isDark,
+                              onRetry: onRetry,
+                            ),
+                          ],
                         ],
-                      ],
-                    ),
-                  ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

@@ -415,6 +415,10 @@ class DecoyNotificationService {
                 conversationId: channelId,
                 messageId: msgId,
               );
+            } else if (change.type == DocumentChangeType.removed) {
+              final data = change.doc.data();
+              final msgId = (data?['id'] as String?) ?? change.doc.id;
+              unawaited(LocalDatabaseService.deleteMessage(msgId));
             }
           }
         }, onError: (err) {
