@@ -364,34 +364,64 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final count = _selectedMessageIds.length;
     if (count == 0) return;
 
+    final chatState = ref.read(chatProvider);
+    final myUid = chatState.myUid;
+    final selectedMsgs = chatState.messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+
+    // Check if any of the selected messages were sent by me
+    final hasSentByMe = selectedMsgs.any(
+      (m) => m.isMe || (myUid.isNotEmpty && m.senderUid == myUid),
+    );
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Delete $count ${count == 1 ? "message" : "messages"}?'),
+        title: Text(
+          count == 1 ? 'Delete message?' : 'Delete $count messages?',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+          ),
+        ),
         content: Text(
-          count == 1
-              ? 'Are you sure you want to delete this message?'
-              : 'Are you sure you want to delete these $count messages?',
-          style: TextStyle(color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight),
+          hasSentByMe
+              ? 'You can delete for everyone or for yourself only.'
+              : 'Delete message(s) from this device?',
+          style: TextStyle(
+            fontSize: 14,
+            color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
-          FilledButton(
+          TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
               final idsToDelete = _selectedMessageIds.toList();
               _clearSelection();
-              await ref.read(chatProvider.notifier).deleteMessages(idsToDelete);
+              await ref.read(chatProvider.notifier).deleteMessages(idsToDelete, forEveryone: false);
             },
-            style: FilledButton.styleFrom(backgroundColor: AppColors.alertRed),
-            child: const Text('Delete'),
+            child: const Text('Delete for Me'),
           ),
+          if (hasSentByMe)
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final idsToDelete = _selectedMessageIds.toList();
+                _clearSelection();
+                await ref.read(chatProvider.notifier).deleteMessages(idsToDelete, forEveryone: true);
+              },
+              style: FilledButton.styleFrom(backgroundColor: AppColors.alertRed),
+              child: const Text('Delete for Everyone'),
+            ),
         ],
       ),
     );

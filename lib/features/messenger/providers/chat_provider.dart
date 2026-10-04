@@ -427,44 +427,27 @@ class ChatNotifier extends Notifier<ChatState> {
   }
 
   /// Delete single message:
-  /// - Sent messages are deleted locally and purged from Cloud Firestore (triggering real-time removal on peer device)
-  /// - Received messages are removed from local view only (leaving Firestore intact for the peer)
-  Future<void> deleteMessage(String id) async {
-    final msgIndex = state.messages.indexWhere((m) => m.id == id);
-    final msg = msgIndex >= 0 ? state.messages[msgIndex] : null;
-    final isMe = msg != null ? (msg.isMe || (state.myUid.isNotEmpty && msg.senderUid == state.myUid)) : false;
-
-    await LocalDatabaseService.deleteMessage(id);
-    final updated = state.messages.where((m) => m.id != id).toList();
-    state = state.copyWith(messages: updated);
-
-    final channelId = state.channelId;
-    final firestore = FirebaseConfig.firestore;
-    if (isMe && channelId != null && firestore != null) {
-      try {
-        await firestore
-            .collection('chats')
-            .doc(channelId)
-            .collection('messages')
-            .doc(id)
-            .delete();
-      } catch (_) {}
-    }
+  /// - forEveryone: true purges sent message from Cloud Firestore (real-time removal on peer device)
+  /// - forEveryone: false removes from local storage only (Delete for Me)
+  Future<void> deleteMessage(String id, {bool forEveryone = false}) async {
+    await deleteMessages([id], forEveryone: forEveryone);
   }
 
   /// Batch delete multiple messages (WhatsApp style):
-  /// - Sent messages are deleted locally and purged from Cloud Firestore (batch delete)
-  /// - Received messages are removed from local storage only
-  Future<void> deleteMessages(List<String> ids) async {
+  /// - forEveryone: true purges sent messages from Cloud Firestore (batch delete)
+  /// - forEveryone: false removes from local storage only (Delete for Me)
+  Future<void> deleteMessages(List<String> ids, {bool forEveryone = false}) async {
     if (ids.isEmpty) return;
     final idSet = ids.toSet();
 
     final toDeleteFromFirestore = <String>[];
-    for (final m in state.messages) {
-      if (idSet.contains(m.id)) {
-        final isMe = m.isMe || (state.myUid.isNotEmpty && m.senderUid == state.myUid);
-        if (isMe) {
-          toDeleteFromFirestore.add(m.id);
+    if (forEveryone) {
+      for (final m in state.messages) {
+        if (idSet.contains(m.id)) {
+          final isMe = m.isMe || (state.myUid.isNotEmpty && m.senderUid == state.myUid);
+          if (isMe) {
+            toDeleteFromFirestore.add(m.id);
+          }
         }
       }
     }
@@ -478,10 +461,10 @@ class ChatNotifier extends Notifier<ChatState> {
     final updated = state.messages.where((m) => !idSet.contains(m.id)).toList();
     state = state.copyWith(messages: updated);
 
-    // 3. Purge sent messages from Cloud Firestore
+    // 3. Purge sent messages from Cloud Firestore if requested
     final channelId = state.channelId;
     final firestore = FirebaseConfig.firestore;
-    if (channelId != null && firestore != null && toDeleteFromFirestore.isNotEmpty) {
+    if (forEveryone && channelId != null && firestore != null && toDeleteFromFirestore.isNotEmpty) {
       try {
         final batch = firestore.batch();
         final coll = firestore.collection('chats').doc(channelId).collection('messages');
