@@ -487,18 +487,51 @@ class ChatNotifier extends Notifier<ChatState> {
     }
   }
 
-  /// Purge all local decrypted messages for this peer
+  /// Purge all messages for this conversation locally and from Cloud Firestore
   Future<void> clearAllMessages() async {
     final peerUid = state.peerUid;
+    final channelId = state.channelId;
+    final firestore = FirebaseConfig.firestore;
+
+    // 1. Immediately empty in-memory state so UI updates instantly
+    state = state.copyWith(messages: []);
+
+    // 2. Delete all messages for this peer from local SQLite database
     if (peerUid != null) {
-      final db = await LocalDatabaseService.database;
-      await db.delete(
-        'messages',
-        where: 'senderUid = ? OR receiverUid = ?',
-        whereArgs: [peerUid, peerUid],
-      );
-      state = state.copyWith(messages: []);
+      try {
+        final db = await LocalDatabaseService.database;
+        await db.delete(
+          'messages',
+          where: 'senderUid = ? OR receiverUid = ?',
+          whereArgs: [peerUid, peerUid],
+        );
+      } catch (e) {
+        if (kDebugMode) debugPrint('[ChatProvider] Local clear error: $e');
+      }
     }
+
+    // 3. Purge all message documents from Cloud Firestore
+    if (channelId != null && firestore != null) {
+      try {
+        final messagesColl = firestore
+            .collection('chats')
+            .doc(channelId)
+            .collection('messages');
+        final snapshots = await messagesColl.get();
+        if (snapshots.docs.isNotEmpty) {
+          final batch = firestore.batch();
+          for (final doc in snapshots.docs) {
+            batch.delete(doc.reference);
+          }
+          await batch.commit();
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('[ChatProvider] Firestore clear error: $e');
+      }
+    }
+
+    // 4. Ensure in-memory list remains clean
+    state = state.copyWith(messages: []);
   }
 
   /// Toggle safety number verification status

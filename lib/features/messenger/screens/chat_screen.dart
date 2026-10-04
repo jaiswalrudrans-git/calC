@@ -427,6 +427,44 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  void _showClearChatDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Clear this chat?'),
+        content: Text(
+          'This will permanently delete all messages in this conversation.',
+          style: TextStyle(
+            fontSize: 14,
+            color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await ref.read(chatProvider.notifier).clearAllMessages();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Chat cleared')),
+                );
+              }
+            },
+            style: FilledButton.styleFrom(backgroundColor: AppColors.alertRed),
+            child: const Text('Clear Chat'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatProvider);
@@ -613,7 +651,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               } else if (val == 'disappearing') {
                 _showDisappearingTimerDialog();
               } else if (val == 'clear') {
-                ref.read(chatProvider.notifier).clearAllMessages();
+                _showClearChatDialog();
               } else if (val == 'settings') {
                 Navigator.push(
                   context,
